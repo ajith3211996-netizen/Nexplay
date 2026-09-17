@@ -412,6 +412,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
   // WebView Client-Side Scraper state
   const [isResolving, setIsResolving] = useState(false);
+  const isResolvingRef = useRef(false);
   const [resolvingStatus, setResolvingStatus] = useState('');
 
   const CATCHY_CINEMA_QUOTES = [
@@ -457,6 +458,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   const lastAbrSwitchTimeRef = useRef(0);
   const lastPlaybackPositionRef = useRef(0);
   const lastProgressTimestampRef = useRef(Date.now());
+  const lastSeekTimestampRef = useRef(0);
 
   const showAbrToast = (msg) => {
     if (abrTimeoutRef.current) clearTimeout(abrTimeoutRef.current);
@@ -476,10 +478,10 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     }, 3500);
   };
 
-  // Merged High-Speed Server 1 (Auto-routes Indian region to HDHub4u & English/Hollywood to 4KHDHub)
+  // Strict Individual Servers: Server 1 (HDHub4u), Server 2 (4KHDHub), Server 3 (Movies4u)
   const servers = [
-    { id: 1, label: 'Server 1', short: 'Server 1', desc: 'Fast Auto Direct Stream' },
-    { id: 2, label: 'Server 2', short: 'Server 2', desc: '4K Ultra & HD Stream' },
+    { id: 1, label: 'Server 1', short: 'Server 1', desc: 'HDHub4u Direct Stream' },
+    { id: 2, label: 'Server 2', short: 'Server 2', desc: '4KHDHub Ultra & HD Stream' },
     { id: 3, label: 'Server 3', short: 'Server 3', desc: 'Movies4u Direct Stream' },
   ];
 
@@ -747,8 +749,11 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   useEventListener(player, 'statusChange', (event) => {
     const currentStatus = event?.status || (player ? player.status : null);
 
-    // ABR Buffer Underrun & Stall Detection
+    // ABR Buffer Underrun & Stall Detection (Ignore normal buffering caused by seeking / fast forward)
     if (currentStatus === 'loading' && isPlaying && hasStartedPlayback && !isResolving) {
+      if (Date.now() - lastSeekTimestampRef.current < 4000) {
+        return;
+      }
       const now = Date.now();
       stallsHistoryRef.current.push(now);
       // Keep only stalls from the last 20 seconds
@@ -759,8 +764,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       }
     }
 
-    // Strictly only trigger playback error if user started playback AND scraping is finished
-    if (hasStartedPlayback && !isResolving && (currentStatus === 'error')) {
+    // Strictly only trigger playback error if user started playback AND scraping is finished and not resolving
+    if (hasStartedPlayback && !isResolving && !isResolvingRef.current && (currentStatus === 'error')) {
       const errorMsg = event?.error?.message || 'Video stream could not be decoded or is offline.';
       console.warn('[MovieDetailScreen] Player error status detected:', errorMsg);
       try {
@@ -844,9 +849,13 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
 
 
-  // Dynamic Scraper & Player execution handler (Server 1 / Play Trigger)
+  // Dynamic Scraper & Player execution handler (Strict Server 1: HDHub4u, Server 2: 4KHDHub, Server 3: Movies4u)
   const playVideo = async (episode = currentEpisode, server = activeServer) => {
     const requestId = ++activeScrapeRequestId.current;
+    isResolvingRef.current = true;
+    setIsResolving(true);
+    setPlaybackError(null);
+    setResolvedQualities(null);
 
     // 1. Safely halt decoder and flush previous surface buffers
     if (player) {
@@ -861,14 +870,11 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     setSelectedSubtitleTrack(null);
     setAvailableAudioTracks([]);
     setAvailableSubtitleTracks([]);
-    setPlaybackError(null);
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
     setHasFirstFrameRendered(false);
     setHasStartedPlayback(true);
-    setIsResolving(true);
-    setResolvedQualities(null);
 
     const targetSeason = episode?.seasonNumber || selectedSeason || 1;
     const targetEpisodeNum = episode?.episodeNumber || 1;
@@ -880,7 +886,6 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     setCurrentEpisode(updatedEp);
 
     try {
-      // Determine if content is Indian regional content (Tamil, Hindi, Telugu, Malayalam, Kannada, etc.)
       const origLang = (details.original_language || movie.original_language || '').toLowerCase();
       const originCountries = (details.origin_country || movie.origin_country || []);
       const prodCountries = (details.production_countries || []).map(c => c.iso_3166_1);
@@ -890,27 +895,27 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                               originCountries.includes('IN') || 
                               prodCountries.includes('IN');
 
-      // Multi-Server Routing:
-      // Server 3: Movies4u.foo Direct Stream Engine
-      // Server 2: 4KHDHub
-      // Server 1: Auto (HDHub4u / 4KHDHub)
+      // Strict Multi-Server Routing (Zero Cross-Fallback):
+      // Server 1: strictly hdhub4u
+      // Server 2: strictly 4khdhub
+      // Server 3: strictly movies4u
       let providerValue = 'hdhub4u';
-      let providerLabel = 'Server 1';
+      let providerLabel = 'Server 1 (HDHub4u)';
       if (server === 3) {
         providerValue = 'movies4u';
-        providerLabel = 'Server 3';
+        providerLabel = 'Server 3 (Movies4u)';
       } else if (server === 2) {
         providerValue = '4khdhub';
-        providerLabel = 'Server 2';
+        providerLabel = 'Server 2 (4KHDHub)';
       } else {
-        providerValue = isIndianContent ? 'hdhub4u' : '4khdhub';
-        providerLabel = 'Server 1';
+        providerValue = 'hdhub4u';
+        providerLabel = 'Server 1 (HDHub4u)';
       }
       const baseTitle = details.title || details.name || movie.title || movie.name || '';
       const cleanTitle = baseTitle.replace(/[:\-–—]/g, ' ').replace(/\s+/g, ' ').trim();
       const releaseYear = formatYear(details.release_date || details.first_air_date || movie.release_date);
 
-      console.log(`[MovieDetailScreen] User clicked Play #${requestId}. Finding match for: "${cleanTitle}" (${releaseYear || 'N/A'}, Type: ${isTVShow ? `TV Series S${targetSeason}E${targetEpisodeNum}` : 'Movie'}) on ${providerLabel} (Dynamic Engine: ${providerValue})`);
+      console.log(`[MovieDetailScreen] User clicked Play #${requestId}. Finding match for: "${cleanTitle}" (${releaseYear || 'N/A'}, Type: ${isTVShow ? `TV Series S${targetSeason}E${targetEpisodeNum}` : 'Movie'}) strictly on ${providerLabel}`);
       setResolvingStatus(
         isTVShow 
           ? `🔍 Searching Season ${targetSeason} • Episode ${targetEpisodeNum} on ${providerLabel}...`
@@ -991,6 +996,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       console.log(`[MovieDetailScreen] ▶️ Playing initial stream (${initialQuality}): ${initialStreamLink}`);
 
       setIsResolving(false);
+      isResolvingRef.current = false;
       setHasStartedPlayback(true);
       setControlsVisible(true);
       resetControlsTimeout();
@@ -1053,14 +1059,15 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     } catch (e) {
       if (requestId !== activeScrapeRequestId.current || !isMounted.current) return;
       console.warn("[MovieDetailScreen] Scraper error:", e.message || e);
+      isResolvingRef.current = false;
       setIsResolving(false);
       setIsPlaying(false);
       const serverObj = servers.find((s) => s.id === server);
-      const serverName = serverObj ? serverObj.short : `Server ${server}`;
+      const serverName = serverObj ? serverObj.desc : `Server ${server}`;
       const baseTitle = details.title || details.name || movie.title || movie.name || 'this media';
       setPlaybackError({
         title: 'Playback Unavailable',
-        message: `Could not connect to a working direct stream for "${baseTitle}" on ${serverName}. Please try switching servers or retry.`,
+        message: `Could not connect to a working direct stream for "${baseTitle}" on ${serverName}. Please try switching to another server or retry.`,
         server: server
       });
     }
@@ -1448,11 +1455,16 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   const skipForward = () => {
     if (player) {
       try {
+        lastSeekTimestampRef.current = Date.now();
         const cur = (currentTimeRef.current > 0 ? currentTimeRef.current : (typeof player.currentTime === 'number' ? player.currentTime : currentTime)) || 0;
         const target = Math.min(duration || 100000, cur + 10);
         currentTimeRef.current = target;
         setCurrentTime(target);
-        player.currentTime = target;
+        if (typeof player.seekBy === 'function') {
+          player.seekBy(10);
+        } else {
+          player.currentTime = target;
+        }
       } catch (e) {
         console.warn('[MovieDetailScreen] skipForward error:', e);
       }
@@ -1463,11 +1475,16 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   const skipBackward = () => {
     if (player) {
       try {
+        lastSeekTimestampRef.current = Date.now();
         const cur = (currentTimeRef.current > 0 ? currentTimeRef.current : (typeof player.currentTime === 'number' ? player.currentTime : currentTime)) || 0;
         const target = Math.max(0, cur - 10);
         currentTimeRef.current = target;
         setCurrentTime(target);
-        player.currentTime = target;
+        if (typeof player.seekBy === 'function') {
+          player.seekBy(-10);
+        } else {
+          player.currentTime = target;
+        }
       } catch (e) {
         console.warn('[MovieDetailScreen] skipBackward error:', e);
       }
@@ -1626,7 +1643,12 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     const { locationX } = event.nativeEvent;
     const effectiveWidth = scrubberWidth > 0 ? scrubberWidth : (playerLayout.width - (isFullscreen ? 48 : 32));
     const progressPercent = Math.max(0, Math.min(1, locationX / (effectiveWidth || 1)));
-    const targetSeekTime = Math.max(0, Math.min(duration || 100000, progressPercent * duration));
+    const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : 0);
+    if (safeDuration <= 0) return;
+    const targetSeekTime = Math.max(0, Math.min(safeDuration, progressPercent * safeDuration));
+
+    lastSeekTimestampRef.current = Date.now();
+    currentTimeRef.current = targetSeekTime;
     setCurrentTime(targetSeekTime);
     if (player) {
       try {
@@ -1656,6 +1678,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
   const handleServerChange = (serverId) => {
     setActiveServer(serverId);
+    setPlaybackError(null);
+    isResolvingRef.current = true;
     playVideo(currentEpisode, serverId);
   };
 
@@ -1749,6 +1773,13 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     const qualityBadgeTextSize = isPortrait ? 10 : 13;
     const qualityBadgePaddingH = isPortrait ? 8 : 12;
     const qualityBadgePaddingV = isPortrait ? 4 : 6;
+    const bottomBtnSize = isPortrait 
+      ? Math.max(26, Math.min(30, Math.round(playerW * 0.075))) 
+      : Math.max(34, Math.min(42, Math.round(playerH * 0.10)));
+    const bottomIconSize = isPortrait 
+      ? Math.max(13, Math.min(16, Math.round(playerW * 0.040))) 
+      : Math.max(18, Math.min(22, Math.round(playerH * 0.055)));
+    const bottomBadgePaddingH = isPortrait ? scale(6) : scale(10);
 
     return (
       <View 
@@ -1803,7 +1834,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         {/* Double-tap visual feedback overlays */}
         {doubleTapFeedback === 'left' && (
           <Animated.View 
-            pointerEvents="none"
+            pointerEvents="none" 
             style={{ 
               opacity: doubleTapOpacity,
               position: 'absolute',
@@ -1822,7 +1853,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
         {doubleTapFeedback === 'right' && (
           <Animated.View 
-            pointerEvents="none"
+            pointerEvents="none" 
             style={{ 
               opacity: doubleTapOpacity,
               position: 'absolute',
@@ -2151,7 +2182,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
               }
             ]}
           >
-            {/* Top Row: Back/Close & Title on left; Full Feature Bar on right */}
+            {/* Top Row: Back/Close & Title on left; Season, Episode, and Server Switcher on right */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: scale(8) }}>
                 <TouchableOpacity 
@@ -2185,7 +2216,31 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                 )}
               </View>
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 0, gap: scale(6) }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexShrink: 0, gap: scale(6) }}>
+                {/* Season Selector Button (Only for TV Series with multiple seasons) */}
+                {isTVShow && seasons && seasons.length > 1 && (
+                  <TouchableOpacity 
+                    onPress={() => activePlayerMenu === 'episodes' ? closePlayerMenu() : openPlayerMenu('episodes')}
+                    activeOpacity={0.8}
+                    style={{ 
+                      paddingHorizontal: scale(8), 
+                      height: topBtnSize,
+                      borderRadius: topBtnSize / 2,
+                      borderWidth: 1,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: activePlayerMenu === 'episodes' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(0,0,0,0.65)',
+                      borderColor: activePlayerMenu === 'episodes' ? '#38bdf8' : 'rgba(255, 255, 255, 0.2)'
+                    }}
+                  >
+                    <Ionicons name="layers-outline" size={topIconSize - 2} color={activePlayerMenu === 'episodes' ? '#38bdf8' : '#ffffff'} style={{ marginRight: scale(3) }} />
+                    <Text style={{ fontSize: moderateScale(qualityBadgeTextSize), color: activePlayerMenu === 'episodes' ? '#38bdf8' : '#ffffff', fontWeight: '800' }}>
+                      S{selectedSeason || 1}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
                 {/* Episodes Selector Button (Only for TV Series) */}
                 {isTVShow && (
                   <TouchableOpacity 
@@ -2205,7 +2260,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                   >
                     <Ionicons name="albums-outline" size={topIconSize - 2} color={activePlayerMenu === 'episodes' ? '#38bdf8' : '#ffffff'} style={{ marginRight: scale(3) }} />
                     <Text style={{ fontSize: moderateScale(qualityBadgeTextSize), color: activePlayerMenu === 'episodes' ? '#38bdf8' : '#ffffff', fontWeight: '800' }}>
-                      Eps
+                      {currentEpisode ? `EP ${currentEpisode.episodeNumber || 1}` : 'Eps'}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -2228,180 +2283,9 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                 >
                   <MaterialCommunityIcons name="server-network" size={topIconSize - 2} color={activePlayerMenu === 'servers' ? '#38bdf8' : '#ffffff'} style={{ marginRight: scale(3) }} />
                   <Text style={{ fontSize: moderateScale(qualityBadgeTextSize), color: activePlayerMenu === 'servers' ? '#38bdf8' : '#ffffff', fontWeight: '800' }}>
-                    S{activeServer}
+                    Server {activeServer}
                   </Text>
                 </TouchableOpacity>
-
-                {/* Quality Selector Badge Button */}
-                <TouchableOpacity 
-                  onPress={() => activePlayerMenu === 'quality' ? closePlayerMenu() : openPlayerMenu('quality')}
-                  activeOpacity={0.8}
-                  style={{ 
-                    paddingHorizontal: qualityBadgePaddingH, 
-                    paddingVertical: qualityBadgePaddingV,
-                    height: topBtnSize,
-                    borderRadius: topBtnSize / 2,
-                    borderWidth: 1,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: activePlayerMenu === 'quality' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(0,0,0,0.65)',
-                    borderColor: activePlayerMenu === 'quality' ? '#38bdf8' : 'rgba(255, 255, 255, 0.2)'
-                  }}
-                >
-                  <MaterialIcons name={qualityMode === 'auto' ? "auto-awesome" : "hd"} size={topIconSize - 2} color="#38bdf8" style={{ marginRight: scale(3) }} />
-                  <Text style={{ fontSize: moderateScale(qualityBadgeTextSize), color: '#38bdf8', fontWeight: '800', letterSpacing: 0.5 }}>
-                    {qualityMode === 'auto' ? `ABR • ${currentQuality.toUpperCase()}` : currentQuality.toUpperCase()}
-                  </Text>
-                </TouchableOpacity>
-
-                {/* Audio Track Selector Button */}
-                <TouchableOpacity 
-                  onPress={() => activePlayerMenu === 'audio' ? closePlayerMenu() : openPlayerMenu('audio')}
-                  activeOpacity={0.8}
-                  style={{ 
-                    width: topBtnSize, 
-                    height: topBtnSize,
-                    borderRadius: topBtnSize / 2,
-                    borderWidth: 1,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: activePlayerMenu === 'audio' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(0,0,0,0.65)',
-                    borderColor: activePlayerMenu === 'audio' ? '#38bdf8' : 'rgba(255, 255, 255, 0.15)'
-                  }}
-                >
-                  <MaterialIcons name="audiotrack" size={topIconSize} color={activePlayerMenu === 'audio' ? '#38bdf8' : '#ffffff'} />
-                </TouchableOpacity>
-
-                {/* Subtitles (CC) Selector Button */}
-                <TouchableOpacity 
-                  onPress={() => activePlayerMenu === 'subtitles' ? closePlayerMenu() : openPlayerMenu('subtitles')}
-                  activeOpacity={0.8}
-                  style={{ 
-                    width: topBtnSize, 
-                    height: topBtnSize,
-                    borderRadius: topBtnSize / 2,
-                    borderWidth: 1,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: activePlayerMenu === 'subtitles' || selectedSubtitleTrack ? 'rgba(56, 189, 248, 0.3)' : 'rgba(0,0,0,0.65)',
-                    borderColor: activePlayerMenu === 'subtitles' || selectedSubtitleTrack ? '#38bdf8' : 'rgba(255, 255, 255, 0.15)'
-                  }}
-                >
-                  <MaterialCommunityIcons 
-                    name={selectedSubtitleTrack ? "subtitles" : "subtitles-outline"} 
-                    size={topIconSize} 
-                    color={selectedSubtitleTrack || activePlayerMenu === 'subtitles' ? "#38bdf8" : "#ffffff"} 
-                  />
-                </TouchableOpacity>
-
-                {/* Playback Speed Switcher (Landscape / Fullscreen) */}
-                {!isPortrait && (
-                  <TouchableOpacity 
-                    onPress={() => activePlayerMenu === 'speed' ? closePlayerMenu() : openPlayerMenu('speed')}
-                    activeOpacity={0.8}
-                    style={{ 
-                      height: topBtnSize, 
-                      paddingHorizontal: scale(10),
-                      borderRadius: topBtnSize / 2,
-                      borderWidth: 1,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: activePlayerMenu === 'speed' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(0,0,0,0.65)',
-                      borderColor: activePlayerMenu === 'speed' ? '#38bdf8' : 'rgba(255, 255, 255, 0.15)'
-                    }}
-                  >
-                    <Text style={{ color: '#ffffff', fontSize: moderateScale(11), fontWeight: '700' }}>{playbackSpeed}x</Text>
-                  </TouchableOpacity>
-                )}
-
-                {/* Aspect Ratio Mode (Landscape / Fullscreen) */}
-                {!isPortrait && (
-                  <TouchableOpacity 
-                    onPress={toggleContentFitMode}
-                    activeOpacity={0.8}
-                    style={{ 
-                      width: topBtnSize, 
-                      height: topBtnSize,
-                      borderRadius: topBtnSize / 2,
-                      borderWidth: 1,
-                      borderColor: 'rgba(255,255,255,0.15)',
-                      backgroundColor: 'rgba(0,0,0,0.65)',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}
-                  >
-                    <MaterialCommunityIcons 
-                      name={contentFitMode === 'cover' ? "aspect-ratio" : "fit-to-screen"} 
-                      size={topIconSize} 
-                      color={contentFitMode === 'cover' ? "#38bdf8" : "#ffffff"} 
-                    />
-                  </TouchableOpacity>
-                )}
-
-                {/* Screen Lock Toggle (Landscape only) */}
-                {!isPortrait && (
-                  <TouchableOpacity 
-                    onPress={toggleScreenLock}
-                    activeOpacity={0.8}
-                    style={{ 
-                      width: topBtnSize, 
-                      height: topBtnSize,
-                      borderRadius: topBtnSize / 2,
-                      borderWidth: 1,
-                      borderColor: 'rgba(255,255,255,0.15)',
-                      backgroundColor: 'rgba(0,0,0,0.65)',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}
-                  >
-                    <Ionicons name="lock-open-outline" size={topIconSize} color="#ffffff" />
-                  </TouchableOpacity>
-                )}
-
-                {/* Mute/Unmute Button */}
-                <TouchableOpacity 
-                  onPress={handleMuteToggle}
-                  style={{ 
-                    width: topBtnSize, 
-                    height: topBtnSize,
-                    borderRadius: topBtnSize / 2,
-                    borderWidth: 1,
-                    borderColor: 'rgba(255,255,255,0.15)',
-                    backgroundColor: 'rgba(0,0,0,0.65)',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                >
-                  <Ionicons 
-                    name={isMuted ? "volume-mute" : "volume-high"} 
-                    size={topIconSize} 
-                    color="#ffffff" 
-                  />
-                </TouchableOpacity>
-
-                {/* Fullscreen Button with animated feedback */}
-                <Animated.View style={{ transform: [{ scale: fullscreenScaleAnim }] }}>
-                  <TouchableOpacity 
-                    onPress={toggleFullscreen}
-                    style={{ 
-                      width: topBtnSize, 
-                      height: topBtnSize,
-                      borderRadius: topBtnSize / 2,
-                      borderWidth: 1,
-                      borderColor: 'rgba(255,255,255,0.15)',
-                      backgroundColor: 'rgba(0,0,0,0.65)',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}
-                  >
-                    <MaterialCommunityIcons 
-                      name={isFullscreenMode ? "fullscreen-exit" : "fullscreen"} 
-                      size={topIconSize} 
-                      color="#ffffff" 
-                    />
-                  </TouchableOpacity>
-                </Animated.View>
               </View>
             </View>
 
@@ -2478,7 +2362,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
               )}
             </View>
 
-            {/* Bottom Scrubber Progress Bar & Timestamps */}
+            {/* Bottom Scrubber Progress Bar, Timestamps & Centered Player Features Bar */}
             {hasStartedPlayback ? (
               <View style={{ width: '100%' }}>
                 <Pressable 
@@ -2487,9 +2371,10 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                   style={{ height: verticalScale(20), width: '100%', justifyContent: 'center', overflow: 'visible' }}
                 >
                   {/* Timeline Track */}
-                  <View style={{ height: verticalScale(3.5), backgroundColor: 'rgba(82, 82, 91, 0.85)', width: '100%', overflow: 'visible', position: 'relative', borderRadius: scale(2) }}>
+                  <View pointerEvents="none" style={{ height: verticalScale(3.5), backgroundColor: 'rgba(82, 82, 91, 0.85)', width: '100%', overflow: 'visible', position: 'relative', borderRadius: scale(2) }}>
                     {/* Active Highlight Track */}
                     <View 
+                      pointerEvents="none"
                       style={{ 
                         width: `${Math.min(100, Math.max(0, (currentTime / (duration || 1)) * 100))}%`,
                         height: '100%',
@@ -2499,6 +2384,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                     />
                     {/* Scrubber thumb circle */}
                     <View 
+                      pointerEvents="none"
                       style={{ 
                         position: 'absolute',
                         left: `${Math.min(100, Math.max(0, (currentTime / (duration || 1)) * 100))}%`, 
@@ -2515,29 +2401,169 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                   </View>
                 </Pressable>
 
-                {/* Dynamic Timestamps & Fullscreen Button */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: verticalScale(2), paddingHorizontal: scale(2) }}>
-                  <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: moderateScale(11), fontWeight: '700' }}>
+                {/* Dynamic Timestamps */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: verticalScale(1), paddingHorizontal: scale(2) }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: moderateScale(10.5), fontWeight: '700' }}>
                     {formatTime(currentTime)}
                   </Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: scale(8) }}>
-                    <Text style={{ color: '#a1a1aa', fontSize: moderateScale(11), fontWeight: '700' }}>
-                      {duration > 0 ? formatTime(duration) : '--:--'}
+                  <Text style={{ color: '#a1a1aa', fontSize: moderateScale(10.5), fontWeight: '700' }}>
+                    {duration > 0 ? formatTime(duration) : '--:--'}
+                  </Text>
+                </View>
+
+                {/* ALL VIDEO PLAYER FEATURES ROW (Centered below the bottom progress bar) */}
+                <View style={{ 
+                  flexDirection: 'row', 
+                  alignItems: 'center', 
+                  justifyContent: 'center', 
+                  marginTop: verticalScale(isPortrait ? 5 : 8),
+                  gap: scale(isPortrait ? 8 : 14)
+                }}>
+                  {/* 1. Settings / Quality Gear Icon Button */}
+                  <TouchableOpacity 
+                    onPress={() => activePlayerMenu === 'quality' ? closePlayerMenu() : openPlayerMenu('quality')}
+                    activeOpacity={0.8}
+                    style={{ 
+                      width: bottomBtnSize, 
+                      height: bottomBtnSize,
+                      borderRadius: bottomBtnSize / 2,
+                      borderWidth: 1,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: activePlayerMenu === 'quality' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(0,0,0,0.65)',
+                      borderColor: activePlayerMenu === 'quality' ? '#38bdf8' : 'rgba(255, 255, 255, 0.15)'
+                    }}
+                  >
+                    <Ionicons 
+                      name="settings-outline" 
+                      size={bottomIconSize} 
+                      color={activePlayerMenu === 'quality' ? "#38bdf8" : "#ffffff"} 
+                    />
+                  </TouchableOpacity>
+
+                  {/* 2. Audio Track Selector Button */}
+                  <TouchableOpacity 
+                    onPress={() => activePlayerMenu === 'audio' ? closePlayerMenu() : openPlayerMenu('audio')}
+                    activeOpacity={0.8}
+                    style={{ 
+                      width: bottomBtnSize, 
+                      height: bottomBtnSize,
+                      borderRadius: bottomBtnSize / 2,
+                      borderWidth: 1,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: activePlayerMenu === 'audio' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(0,0,0,0.65)',
+                      borderColor: activePlayerMenu === 'audio' ? '#38bdf8' : 'rgba(255, 255, 255, 0.15)'
+                    }}
+                  >
+                    <MaterialIcons name="audiotrack" size={bottomIconSize} color={activePlayerMenu === 'audio' ? '#38bdf8' : '#ffffff'} />
+                  </TouchableOpacity>
+
+                  {/* 3. Subtitles (CC) Selector Button */}
+                  <TouchableOpacity 
+                    onPress={() => activePlayerMenu === 'subtitles' ? closePlayerMenu() : openPlayerMenu('subtitles')}
+                    activeOpacity={0.8}
+                    style={{ 
+                      width: bottomBtnSize, 
+                      height: bottomBtnSize,
+                      borderRadius: bottomBtnSize / 2,
+                      borderWidth: 1,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: activePlayerMenu === 'subtitles' || selectedSubtitleTrack ? 'rgba(56, 189, 248, 0.3)' : 'rgba(0,0,0,0.65)',
+                      borderColor: activePlayerMenu === 'subtitles' || selectedSubtitleTrack ? '#38bdf8' : 'rgba(255, 255, 255, 0.15)'
+                    }}
+                  >
+                    <MaterialCommunityIcons 
+                      name={selectedSubtitleTrack ? "subtitles" : "subtitles-outline"} 
+                      size={bottomIconSize} 
+                      color={selectedSubtitleTrack || activePlayerMenu === 'subtitles' ? "#38bdf8" : "#ffffff"} 
+                    />
+                  </TouchableOpacity>
+
+                  {/* 4. Playback Speed Button */}
+                  <TouchableOpacity 
+                    onPress={() => activePlayerMenu === 'speed' ? closePlayerMenu() : openPlayerMenu('speed')}
+                    activeOpacity={0.8}
+                    style={{ 
+                      height: bottomBtnSize, 
+                      paddingHorizontal: scale(isPortrait ? 8 : 10),
+                      borderRadius: bottomBtnSize / 2,
+                      borderWidth: 1,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: activePlayerMenu === 'speed' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(0,0,0,0.65)',
+                      borderColor: activePlayerMenu === 'speed' ? '#38bdf8' : 'rgba(255, 255, 255, 0.15)'
+                    }}
+                  >
+                    <Text style={{ color: activePlayerMenu === 'speed' ? '#38bdf8' : '#ffffff', fontSize: moderateScale(isPortrait ? 10 : 11.5), fontWeight: '700' }}>
+                      {playbackSpeed}x
                     </Text>
-                    {isPortrait && (
-                      <TouchableOpacity 
-                        onPress={toggleFullscreen}
-                        activeOpacity={0.7}
-                        style={{ padding: scale(2) }}
-                      >
-                        <MaterialCommunityIcons 
-                          name="fullscreen" 
-                          size={scale(16)} 
-                          color="#ffffff" 
-                        />
-                      </TouchableOpacity>
-                    )}
-                  </View>
+                  </TouchableOpacity>
+
+                  {/* 5. Aspect Ratio Mode Button */}
+                  <TouchableOpacity 
+                    onPress={toggleContentFitMode}
+                    activeOpacity={0.8}
+                    style={{ 
+                      width: bottomBtnSize, 
+                      height: bottomBtnSize,
+                      borderRadius: bottomBtnSize / 2,
+                      borderWidth: 1,
+                      borderColor: contentFitMode === 'cover' ? '#38bdf8' : 'rgba(255,255,255,0.15)',
+                      backgroundColor: contentFitMode === 'cover' ? 'rgba(56, 189, 248, 0.25)' : 'rgba(0,0,0,0.65)',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <MaterialCommunityIcons 
+                      name={contentFitMode === 'cover' ? "aspect-ratio" : "fit-to-screen"} 
+                      size={bottomIconSize} 
+                      color={contentFitMode === 'cover' ? "#38bdf8" : "#ffffff"} 
+                    />
+                  </TouchableOpacity>
+
+                  {/* 6. Screen Lock Toggle */}
+                  <TouchableOpacity 
+                    onPress={toggleScreenLock}
+                    activeOpacity={0.8}
+                    style={{ 
+                      width: bottomBtnSize, 
+                      height: bottomBtnSize,
+                      borderRadius: bottomBtnSize / 2,
+                      borderWidth: 1,
+                      borderColor: 'rgba(255,255,255,0.15)',
+                      backgroundColor: 'rgba(0,0,0,0.65)',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <Ionicons name="lock-open-outline" size={bottomIconSize} color="#ffffff" />
+                  </TouchableOpacity>
+
+                  {/* 7. Fullscreen Toggle Button */}
+                  <Animated.View style={{ transform: [{ scale: fullscreenScaleAnim }] }}>
+                    <TouchableOpacity 
+                      onPress={toggleFullscreen}
+                      activeOpacity={0.8}
+                      style={{ 
+                        width: bottomBtnSize, 
+                        height: bottomBtnSize,
+                        borderRadius: bottomBtnSize / 2,
+                        borderWidth: 1,
+                        borderColor: isFullscreenMode ? '#38bdf8' : 'rgba(255,255,255,0.15)',
+                        backgroundColor: isFullscreenMode ? 'rgba(56, 189, 248, 0.25)' : 'rgba(0,0,0,0.65)',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      <MaterialCommunityIcons 
+                        name={isFullscreenMode ? "fullscreen-exit" : "fullscreen"} 
+                        size={bottomIconSize} 
+                        color={isFullscreenMode ? "#38bdf8" : "#ffffff"} 
+                      />
+                    </TouchableOpacity>
+                  </Animated.View>
                 </View>
               </View>
             ) : (
@@ -2572,7 +2598,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
               style={{
                 position: 'absolute',
                 right: isFullscreenMode ? scale(24) : scale(14),
-                bottom: controlsVisible ? (isFullscreenMode ? verticalScale(58) : verticalScale(44)) : (isFullscreenMode ? verticalScale(22) : verticalScale(14)),
+                bottom: controlsVisible ? (isFullscreenMode ? verticalScale(84) : verticalScale(68)) : (isFullscreenMode ? verticalScale(22) : verticalScale(14)),
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: scale(8),
@@ -3185,7 +3211,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         <View style={detailStyles.actionButtonsRow}>
           {/* Main White Play Button */}
           <TouchableOpacity 
-            onPress={() => playVideo(currentEpisode, 1)}
+            onPress={() => playVideo(currentEpisode, activeServer)}
             activeOpacity={0.85}
             style={detailStyles.playButton}
           >

@@ -55,6 +55,32 @@ export function extractStreamUrls(code) {
     return Array.from(new Set(matches.map(m => m[0])));
 }
 
+export function sortBridgesByFidelity(bridges) {
+    if (!bridges || !Array.isArray(bridges)) return [];
+    const isZip = (b) => {
+        const text = `${b.quality || ''} ${b.label || ''} ${b.bridgeUrl || ''}`.toLowerCase();
+        return text.includes('.zip') || text.includes('.rar') || text.includes('.7z') || text.includes('.tar') || text.includes('zippack') || text.includes('zip_pack') || text.includes('zip pack') || text.includes('batch zip') || text.includes('season zip');
+    };
+    const validBridges = bridges.filter(b => !isZip(b));
+    const scoreBridge = (b) => {
+        const text = `${b.quality || ''} ${b.label || ''} ${b.bridgeUrl || ''}`.toLowerCase();
+        let score = 0;
+        if (/\b(2160p|4k|uhd)\b/i.test(text)) score += 500;
+        else if (/\b(1080p|fhd)\b/i.test(text)) score += 250;
+        else if (/\b(720p)\b/i.test(text)) score += 100;
+        else if (/\b(480p)\b/i.test(text)) score += 50;
+
+        const targetKeywords = ['hevc', 'hdr', 'hdr10', 'hdr10+', 'sdr', 'dv', 'dolby vision', 'multi audio', 'multi', 'dual audio', 'x265', 'x264', 'h.265', 'h.264', '10bit', '10-bit', 'atmos', 'dts', 'ddp5.1', 'web-dl', 'bluray', 'remux'];
+        for (const kw of targetKeywords) {
+            if (text.includes(kw)) score += 25;
+        }
+        const sizeMatch = text.match(/([\d.]+)\s*gb/i);
+        if (sizeMatch) score += Math.min(100, Math.round(parseFloat(sizeMatch[1]) * 10));
+        return score;
+    };
+    return [...validBridges].sort((a, b) => scoreBridge(b) - scoreBridge(a));
+}
+
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 /**
  * Movies4u Provider & Stream Extractor
@@ -190,21 +216,29 @@ export class Movies4uClient {
             });
         }
         // 2. Extract Download Links / Quality Bridges (m4ulinks.site)
-        // Structure: <h4>{Title/Season/Quality} [{Size}]</h4> followed by <a href="https://m4ulinks.site/number/{id}">
         const sectionRegex = /<h4[^>]*>([\s\S]*?)<\/h4>\s*(?:<div[^>]*>)?\s*<a[^>]+href=["'](https?:\/\/m4ulinks\.site\/number\/\d+)["']/gi;
         let sMatch;
         const bridgeList = [];
         while ((sMatch = sectionRegex.exec(html)) !== null) {
             const label = sMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
             const bridgeUrl = sMatch[2];
+            const lowerLabel = label.toLowerCase();
+            const lowerBridge = bridgeUrl.toLowerCase();
+            if (
+                lowerLabel.includes('.zip') || lowerLabel.includes('zip pack') || lowerLabel.includes('zippack') || lowerLabel.includes('batch') || lowerLabel.includes('season zip') || lowerLabel.includes('all in one zip') ||
+                lowerBridge.includes('.zip') || lowerBridge.includes('.rar') || lowerBridge.includes('zippack')
+            ) {
+                continue;
+            }
             const quality = this.detectQuality(label);
             const sizeMatch = label.match(/\[([\d.]+\s*(?:GB|MB)(?:\/[Ee])?)\]/i);
             const size = sizeMatch ? sizeMatch[1] : undefined;
             bridgeList.push({ label, quality, size, bridgeUrl });
         }
         if (!isSeries) {
-            // For movies, fetch the primary download bridge (e.g. 1080p or highest available)
-            const primaryBridge = bridgeList.find(b => b.quality === '1080p') || bridgeList[0];
+            // For movies, fetch the primary 4K / highest quality download bridge
+            const sortedBridges = sortBridgesByFidelity(bridgeList);
+            const primaryBridge = sortedBridges[0];
             if (primaryBridge) {
                 const hubLinks = await this.extractHubCloudFromBridge(primaryBridge.bridgeUrl, primaryBridge.quality, fetcher);
                 streamingLinks.push(...hubLinks);
@@ -235,17 +269,15 @@ export class Movies4uClient {
         // Parse target season episodes
         const seasonToFetch = seasonsMap.has(targetSeason) ? targetSeason : (Array.from(seasonsMap.keys())[0] || 1);
         const targetSeasonBridges = seasonsMap.get(seasonToFetch) || [];
-        // Prefer 1080p bridge for episode list, or first available
-        const preferredBridge = targetSeasonBridges.find(b => b.quality === '1080p')
-            || targetSeasonBridges.find(b => b.quality === '720p')
-            || targetSeasonBridges[0];
+        const sortedSeasonBridges = sortBridgesByFidelity(targetSeasonBridges);
+        const preferredBridge = sortedSeasonBridges[0];
         if (preferredBridge) {
             currentEpisodes = await this.extractEpisodesFromBridge(preferredBridge.bridgeUrl, preferredBridge.quality, fetcher);
         }
         for (const [sNum, bridges] of seasonsMap.entries()) {
             seasons.push({
                 seasonNumber: sNum,
-                qualityBridges: bridges,
+                qualityBridges: sortBridgesByFidelity(bridges),
                 episodes: sNum === seasonToFetch ? currentEpisodes : []
             });
         }
@@ -273,7 +305,7 @@ export class Movies4uClient {
             return this.resolveM4uPlay(bridgeUrl, qualityHint, fetcher);
         }
         // 2. HubCloud / HubDrive / Gamerxyt Resolver -> Direct Cloudflare R2 / Lenin CDN / 10Gbps
-        if (lowerUrl.includes('hubcloud') || lowerUrl.includes('gamerxyt.com') || lowerUrl.includes('hubdrive')) {
+        if (lowerUrl.includes('hubcloud') || lowerUrl.includes('gamerxyt.com') || lowerUrl.includes('hubdrive') || lowerUrl.includes('hubcdn') || lowerUrl.includes('drive')) {
             return this.resolveHubCloud(bridgeUrl, qualityHint, fetcher);
         }
         // 3. GDFlix Resolver
@@ -298,70 +330,112 @@ export class Movies4uClient {
      * High-level 1-Click Playable Stream Generator for Media3 ExoPlayer
      */
     async getPlayableStream(pageUrl, isTVShow = false, episodeNumber = 1, seasonNumber = 1, customHttpGet) {
-        const details = await this.extractDetails(pageUrl, seasonNumber, customHttpGet);
+        const fetcher = customHttpGet || this.defaultHttpGet.bind(this);
+        const details = await this.extractDetails(pageUrl, seasonNumber, fetcher);
+        
         if (!isTVShow && details.mediaType === 'movie') {
-            // Resolve movie streams
-            // 1. Check M4UPlay first for immediate adaptive HLS stream
-            const m4uEmbed = details.streamingLinks?.find(s => s.url.includes('m4uplay.store'));
-            if (m4uEmbed) {
-                try {
-                    const resolved = await this.resolveStream(m4uEmbed.url, details.quality || '1080p', customHttpGet);
-                    if (resolved.length > 0) {
-                        const primary = resolved[0];
-                        return {
-                            title: details.title,
-                            mediaType: 'movie',
-                            streamUrl: primary.url,
-                            headers: primary.headers || { 'User-Agent': DEFAULT_USER_AGENT, 'Referer': 'https://m4uplay.store/' },
-                            mimeType: primary.mimeType || 'application/vnd.apple.mpegurl',
-                            quality: primary.quality,
-                            server: primary.server,
-                            thumbnail: details.thumbnail,
-                            backupStreams: resolved.slice(1)
-                        };
-                    }
-                } catch (e) {}
-            }
-            // 2. Iterate ALL streaming & download link candidates until a stream is resolved
+            const qualities = {};
             const candidates = [
                 ...(details.streamingLinks || []).filter(s => !s.url.includes('m4uplay.store')),
                 ...(details.downloadLinks || [])
             ];
-            // Prioritize hubcloud and gdflix bridges
+            // Prioritize 4K/GDFlix/HubCloud bridges
             candidates.sort((a, b) => {
-                const aP = (a.url.includes('hubcloud') || a.url.includes('gdflix')) ? 1 : 0;
-                const bP = (b.url.includes('hubcloud') || b.url.includes('gdflix')) ? 1 : 0;
-                return bP - aP;
+                const a4K = /\b(2160p|4k|uhd)\b/i.test(`${a.quality || ''} ${a.server || ''}`);
+                const b4K = /\b(2160p|4k|uhd)\b/i.test(`${b.quality || ''} ${b.server || ''}`);
+                if (a4K && !b4K) return -1;
+                if (!a4K && b4K) return 1;
+                return 0;
             });
 
             for (const candidate of candidates) {
                 try {
-                    const resolved = await this.resolveStream(candidate.url, candidate.quality || details.quality || '1080p', customHttpGet);
+                    const qHint = candidate.quality || details.quality || '4K';
+                    const resolved = await this.resolveStream(candidate.url, qHint, fetcher);
                     if (resolved.length > 0) {
                         const primary = resolved[0];
-                        return {
-                            title: details.title,
-                            mediaType: 'movie',
-                            streamUrl: primary.url,
-                            headers: primary.headers || { 'User-Agent': DEFAULT_USER_AGENT },
-                            mimeType: primary.mimeType || 'video/x-matroska',
-                            quality: primary.quality,
-                            server: primary.server,
-                            thumbnail: details.thumbnail,
-                            backupStreams: resolved.slice(1)
-                        };
+                        const qKey = (qHint.toLowerCase().includes('4k') || qHint.includes('2160')) ? '4k' : (qHint.includes('1080') ? '1080p' : (qHint.includes('720') ? '720p' : '1080p'));
+                        if (!qualities[qKey]) qualities[qKey] = primary.url;
                     }
                 } catch (e) {}
             }
+
+            const primaryUrl = qualities['4k'] || qualities['2160p'] || qualities['1080p'] || qualities['720p'] || Object.values(qualities)[0];
+            if (primaryUrl) {
+                const chosenQ = (qualities['4k'] || qualities['2160p']) ? '4K' : (qualities['1080p'] ? '1080p' : '720p');
+                return {
+                    title: details.title,
+                    mediaType: 'movie',
+                    streamUrl: primaryUrl,
+                    qualities,
+                    headers: { 'User-Agent': DEFAULT_USER_AGENT },
+                    mimeType: 'video/x-matroska',
+                    quality: chosenQ,
+                    server: chosenQ === '4K' ? 'Server 3 (Movies4u 4K Direct)' : 'Server 3 (Movies4u)',
+                    thumbnail: details.thumbnail
+                };
+            }
         }
+
         // TV Series Handling
         if (isTVShow || details.mediaType === 'series') {
+            const season = details.seasons?.find(s => s.seasonNumber === seasonNumber) || details.seasons?.[0];
+            const sortedBridges = season && season.qualityBridges.length > 0 ? sortBridgesByFidelity(season.qualityBridges) : [];
+            const qualities = {};
+            let primaryResult = null;
+
+            // Iterate across candidate bridges in fidelity order (4K -> 1080p -> 720p)
+            for (const bridge of sortedBridges) {
+                try {
+                    const episodes = await this.extractEpisodesFromBridge(bridge.bridgeUrl, bridge.quality, fetcher);
+                    const ep = episodes.find(e => e.episodeNumber === episodeNumber) || episodes[0];
+                    if (ep && ep.links && ep.links.length > 0) {
+                        for (const l of ep.links) {
+                            try {
+                                const resolved = await this.resolveStream(l.url, bridge.quality || '4K', fetcher);
+                                if (resolved.length > 0) {
+                                    const primary = resolved[0];
+                                    const qKey = (bridge.quality || '').toLowerCase().includes('4k') || (bridge.quality || '').includes('2160') ? '4k' : ((bridge.quality || '').includes('1080') ? '1080p' : ((bridge.quality || '').includes('720') ? '720p' : '1080p'));
+                                    if (!qualities[qKey]) {
+                                        qualities[qKey] = primary.url;
+                                    }
+                                    if (!primaryResult) {
+                                        primaryResult = {
+                                            title: `${details.title} - S${seasonNumber}E${ep.episodeNumber}`,
+                                            mediaType: 'series',
+                                            seasonNumber,
+                                            episodeNumber: ep.episodeNumber,
+                                            streamUrl: primary.url,
+                                            headers: primary.headers || { 'User-Agent': DEFAULT_USER_AGENT },
+                                            mimeType: primary.mimeType || 'video/x-matroska',
+                                            quality: qKey === '4k' ? '4K' : (qKey === '1080p' ? '1080p' : qKey),
+                                            server: primary.server || 'Server 3 (Movies4u)',
+                                            thumbnail: details.thumbnail
+                                        };
+                                    }
+                                    break;
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                } catch (bErr) {}
+                if (qualities['4k'] && qualities['1080p']) break;
+            }
+
+            if (primaryResult) {
+                primaryResult.qualities = qualities;
+                const primaryUrl = qualities['4k'] || qualities['2160p'] || qualities['1080p'] || qualities['720p'] || primaryResult.streamUrl;
+                primaryResult.streamUrl = primaryUrl;
+                primaryResult.quality = (qualities['4k'] || qualities['2160p']) ? '4K' : (qualities['1080p'] ? '1080p' : primaryResult.quality);
+                return primaryResult;
+            }
+
+            // Fallback to ep.links on details
             const ep = details.episodes?.find(e => e.episodeNumber === episodeNumber) || details.episodes?.[0];
             if (ep && ep.links && ep.links.length > 0) {
-                // Dynamically iterate through all bridge links (HubCloud, GDFlix, etc.) until one resolves
                 for (const bridge of ep.links) {
                     try {
-                        const resolved = await this.resolveStream(bridge.url, bridge.quality || '1080p', customHttpGet);
+                        const resolved = await this.resolveStream(bridge.url, bridge.quality || '4K', fetcher);
                         if (resolved.length > 0) {
                             const primary = resolved[0];
                             return {
@@ -370,10 +444,11 @@ export class Movies4uClient {
                                 seasonNumber,
                                 episodeNumber: ep.episodeNumber,
                                 streamUrl: primary.url,
+                                qualities: { '4k': primary.url },
                                 headers: primary.headers || { 'User-Agent': DEFAULT_USER_AGENT },
                                 mimeType: primary.mimeType || 'video/x-matroska',
-                                quality: primary.quality,
-                                server: primary.server,
+                                quality: primary.quality || '4K',
+                                server: primary.server || 'Server 3 (Movies4u)',
                                 thumbnail: details.thumbnail,
                                 backupStreams: resolved.slice(1)
                             };
@@ -475,7 +550,8 @@ export class Movies4uClient {
         }
         return [];
     }
-    async resolveHubCloud(hubUrl, qualityHint, fetcher) {
+    async resolveHubCloud(hubUrl, qualityHint, customHttpGet) {
+        const fetcher = customHttpGet || this.defaultHttpGet.bind(this);
         const results = [];
         try {
             let currentUrl = hubUrl;
@@ -494,23 +570,70 @@ export class Movies4uClient {
                     });
                 }
             }
-            // Extract direct stream candidates from gamerxyt page
+            if (!currentUrl.includes('gamerxyt.com')) {
+                const anyGamer = html.match(/href=["'](https?:\/\/[^"']*gamerxyt\.[^"']*)["']/i)
+                    || html.match(/<a[^>]*id=["']download["'][^>]*href=["']([^"']+)["']/i)
+                    || html.match(/var\s+url\s*=\s*['"]([^'"]+)['"]/i);
+                if (anyGamer && anyGamer[1]) {
+                    currentUrl = anyGamer[1].replace(/&amp;/g, '&');
+                    html = await fetcher(currentUrl, {
+                        'User-Agent': DEFAULT_USER_AGENT,
+                        'Referer': hubUrl
+                    });
+                }
+            }
+            // Extract direct stream candidates from landing/gamerxyt page
             const links = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];
             for (const [_, href, rawLabel] of links) {
                 const label = rawLabel.replace(/<[^>]+>/g, '').trim();
+                const lowerHref = href.toLowerCase();
+                const lowerLabel = label.toLowerCase();
+                
+                // Strictly ignore ZIP and compressed archive links
+                if (
+                    lowerHref.includes('.zip') || lowerHref.includes('.rar') || lowerHref.includes('.7z') || lowerHref.includes('.tar') || lowerHref.includes('.gz') || lowerHref.includes('zippack') ||
+                    lowerLabel.includes('.zip') || lowerLabel.includes('zip pack') || lowerLabel.includes('zippack') || lowerLabel.includes('batch')
+                ) {
+                    continue;
+                }
+                
                 // 1. Cloudflare R2 Direct Stream
                 if (href.includes('r2.cloudflarestorage.com')) {
                     results.push({
                         quality: qualityHint,
                         url: href,
                         originalUrl: hubUrl,
-                        server: 'Download [FSL Server] (Cloudflare R2 Direct Stream)',
+                        server: 'Download [FSL 4K Server] (Cloudflare R2 Direct Stream)',
                         type: 'direct',
                         headers: { 'User-Agent': DEFAULT_USER_AGENT },
                         mimeType: 'video/x-matroska'
                     });
                 }
-                // 2. Lenin Buzz CDN
+                // 2. Cloudflare Worker Stream (.dev / workers.dev)
+                else if ((href.includes('workers.dev') || href.includes('.dev')) && !href.includes('/?id=')) {
+                    results.push({
+                        quality: qualityHint,
+                        url: href,
+                        originalUrl: hubUrl,
+                        server: 'Download [Server : 10Gbps 4K] (Direct Cloudflare Worker Stream)',
+                        type: 'direct',
+                        headers: { 'User-Agent': DEFAULT_USER_AGENT, 'Referer': 'https://gamerxyt.com/' },
+                        mimeType: 'video/x-matroska'
+                    });
+                }
+                // 3. Google CDN Direct Stream
+                else if (href.includes('googleusercontent.com') || href.includes('video-downloads') || href.includes('gpdl.')) {
+                    results.push({
+                        quality: qualityHint,
+                        url: href,
+                        originalUrl: hubUrl,
+                        server: 'Download [Server : 10Gbps] (Google CDN Direct Stream)',
+                        type: 'direct',
+                        headers: { 'User-Agent': DEFAULT_USER_AGENT },
+                        mimeType: 'video/mp4'
+                    });
+                }
+                // 4. Lenin Buzz CDN
                 else if (href.includes('cdn.lenin.buzz') || (href.includes('.mkv') && href.includes('token='))) {
                     results.push({
                         quality: qualityHint,
@@ -522,7 +645,19 @@ export class Movies4uClient {
                         mimeType: 'video/x-matroska'
                     });
                 }
-                // 3. PixelDrain Direct File API
+                // 5. FastDL / Bunker / Valentine
+                else if (href.includes('fastdl') || href.includes('bunker.monster') || href.includes('valentine.guru')) {
+                    results.push({
+                        quality: qualityHint,
+                        url: href,
+                        originalUrl: hubUrl,
+                        server: 'Download [FastDL] (Direct High-Speed Stream)',
+                        type: 'direct',
+                        headers: { 'User-Agent': DEFAULT_USER_AGENT },
+                        mimeType: 'video/x-matroska'
+                    });
+                }
+                // 6. PixelDrain Direct File API
                 else if (href.includes('pixeldrain.dev/u/')) {
                     const fileId = href.split('/u/')[1]?.split('?')[0];
                     if (fileId) {
@@ -537,7 +672,7 @@ export class Movies4uClient {
                         });
                     }
                 }
-                // 4. 10Gbps Google Direct Stream
+                // 7. 10Gbps GPDL Stream
                 else if (href.includes('gpdl.hubcloud')) {
                     results.push({
                         quality: qualityHint,
@@ -556,7 +691,8 @@ export class Movies4uClient {
         }
         return results;
     }
-    async resolveGDFlix(gdFlixUrl, qualityHint, fetcher) {
+    async resolveGDFlix(gdFlixUrl, qualityHint, customHttpGet) {
+        const fetcher = customHttpGet || this.defaultHttpGet.bind(this);
         try {
             const html = await fetcher(gdFlixUrl, {
                 'User-Agent': DEFAULT_USER_AGENT,
@@ -568,7 +704,7 @@ export class Movies4uClient {
                         quality: qualityHint,
                         url: instantMatch[1],
                         originalUrl: gdFlixUrl,
-                        server: 'GDFlix [Instant 10GBPS]',
+                        server: 'GDFlix [Instant 10GBPS 4K]',
                         type: 'direct',
                         headers: { 'User-Agent': DEFAULT_USER_AGENT },
                         mimeType: 'video/x-matroska'
@@ -580,47 +716,61 @@ export class Movies4uClient {
         }
         return [];
     }
-    async extractHubCloudFromBridge(bridgeUrl, quality, fetcher) {
+    async extractHubCloudFromBridge(bridgeUrl, quality, customHttpGet) {
+        const fetcher = customHttpGet || this.defaultHttpGet.bind(this);
         try {
             const html = await fetcher(bridgeUrl, {
                 'User-Agent': DEFAULT_USER_AGENT,
                 'Referer': this.liveBaseUrl
             });
-            const links = [...html.matchAll(/<a[^>]+href=["'](https?:\/\/[^"']*(?:hubcloud|gdflix)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)];
-            return links.map(([_, url, rawText]) => {
-                const text = rawText.replace(/<[^>]+>/g, '').trim();
-                return {
-                    quality,
-                    url,
-                    originalUrl: bridgeUrl,
-                    server: text || 'Hub-Cloud [DD]',
-                    type: 'download',
-                    headers: { 'User-Agent': DEFAULT_USER_AGENT }
-                };
-            });
+            const links = [...html.matchAll(/<a[^>]+href=["'](https?:\/\/[^"']*(?:hubcloud|gdflix|drive|hubcdn)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)];
+            return links
+                .filter(([_, url, rawText]) => {
+                    const lUrl = url.toLowerCase();
+                    const lText = rawText.toLowerCase();
+                    return !lUrl.includes('.zip') && !lUrl.includes('.rar') && !lUrl.includes('.7z') && !lUrl.includes('zippack') && !lText.includes('.zip') && !lText.includes('zip pack') && !lText.includes('batch');
+                })
+                .map(([_, url, rawText]) => {
+                    const text = rawText.replace(/<[^>]+>/g, '').trim();
+                    return {
+                        quality,
+                        url,
+                        originalUrl: bridgeUrl,
+                        server: text || (url.includes('gdflix') ? 'GDFlix' : 'Hub-Cloud [DD]'),
+                        type: 'download',
+                        headers: { 'User-Agent': DEFAULT_USER_AGENT }
+                    };
+                });
         }
         catch {
             return [];
         }
     }
-    async extractEpisodesFromBridge(bridgeUrl, quality, fetcher) {
+    async extractEpisodesFromBridge(bridgeUrl, quality, customHttpGet) {
+        const fetcher = customHttpGet || this.defaultHttpGet.bind(this);
         try {
             const html = await fetcher(bridgeUrl, {
                 'User-Agent': DEFAULT_USER_AGENT,
                 'Referer': this.liveBaseUrl
             });
             const episodes = [];
-            const parts = html.split(/<h5>\s*-:\s*Episodes?:?\s*(\d+)\s*:-?\s*<\/h5>/i);
+            const parts = html.split(/<h[1-6][^>]*>\s*-:\s*Episodes?:?\s*(\d+)\s*:-?\s*<\/h[1-6]>/i);
             for (let i = 1; i < parts.length; i += 2) {
                 const epNum = parseInt(parts[i], 10);
                 const epContent = parts[i + 1] || '';
-                const links = [...epContent.matchAll(/<a[^>]+href=["'](https?:\/\/[^"']*(?:hubcloud|gdflix)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)];
-                const episodeLinks = links.map(([_, href, rawLabel]) => ({
-                    title: rawLabel.replace(/<[^>]+>/g, '').trim(),
-                    url: href,
-                    server: href.includes('hubcloud') ? 'Hub-Cloud [DD]' : 'GDFlix',
-                    quality
-                }));
+                const links = [...epContent.matchAll(/<a[^>]+href=["'](https?:\/\/[^"']*(?:hubcloud|gdflix|drive|hubcdn)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)];
+                const episodeLinks = links
+                    .filter(([_, href, rawLabel]) => {
+                        const lHref = href.toLowerCase();
+                        const lLabel = rawLabel.toLowerCase();
+                        return !lHref.includes('.zip') && !lHref.includes('.rar') && !lHref.includes('.7z') && !lHref.includes('zippack') && !lLabel.includes('.zip') && !lLabel.includes('zip pack') && !lLabel.includes('batch');
+                    })
+                    .map(([_, href, rawLabel]) => ({
+                        title: rawLabel.replace(/<[^>]+>/g, '').trim(),
+                        url: href,
+                        server: href.includes('hubcloud') ? 'Hub-Cloud [DD]' : (href.includes('gdflix') ? 'GDFlix' : 'Fast CDN'),
+                        quality
+                    }));
                 episodes.push({
                     episodeNumber: epNum,
                     title: `Episode ${epNum}`,
@@ -670,7 +820,20 @@ export class Movies4uClient {
         return 'video/mp4';
     }
     isDirectMediaStream(url) {
+        if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
         const lower = url.toLowerCase().split('?')[0];
+        if (
+            lower.includes('.zip') ||
+            lower.includes('.rar') ||
+            lower.includes('.7z') ||
+            lower.includes('.tar') ||
+            lower.includes('.gz') ||
+            lower.includes('.iso') ||
+            lower.includes('zippack') ||
+            lower.includes('zip_pack')
+        ) {
+            return false;
+        }
         return lower.endsWith('.m3u8')
             || lower.endsWith('.mp4')
             || lower.endsWith('.mkv')

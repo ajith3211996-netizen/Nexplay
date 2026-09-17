@@ -2,6 +2,39 @@ import { Movies4u, Movies4uClient } from './Movies4uProvider.js';
 // src/utils/ScraperEngine.js
 import { resolveDomain, resolveUrlWithDoh } from './DnsResolver.js';
 
+function normalizeNumbers(str) {
+  if (!str) return '';
+  return str
+    .replace(/\b(?:part|chapter|volume|vol)\s+([0-9]+)\b/gi, 'part $1')
+    .replace(/\b(?:part|chapter|volume|vol)\s+one\b/gi, 'part 1')
+    .replace(/\b(?:part|chapter|volume|vol)\s+two\b/gi, 'part 2')
+    .replace(/\b(?:part|chapter|volume|vol)\s+three\b/gi, 'part 3')
+    .replace(/\b(?:part|chapter|volume|vol)\s+four\b/gi, 'part 4')
+    .replace(/\b(?:part|chapter|volume|vol)\s+five\b/gi, 'part 5')
+    .replace(/\b(?:part|chapter|volume|vol)\s+i\b/gi, 'part 1')
+    .replace(/\b(?:part|chapter|volume|vol)\s+ii\b/gi, 'part 2')
+    .replace(/\b(?:part|chapter|volume|vol)\s+iii\b/gi, 'part 3')
+    .replace(/\b(?:part|chapter|volume|vol)\s+iv\b/gi, 'part 4')
+    .replace(/\b(?:part|chapter|volume|vol)\s+v\b/gi, 'part 5')
+    .replace(/\bone\b/gi, '1')
+    .replace(/\btwo\b/gi, '2')
+    .replace(/\bthree\b/gi, '3')
+    .replace(/\bfour\b/gi, '4')
+    .replace(/\bfive\b/gi, '5')
+    .replace(/\bsix\b/gi, '6')
+    .replace(/\bseven\b/gi, '7')
+    .replace(/\beight\b/gi, '8')
+    .replace(/\bnine\b/gi, '9')
+    .replace(/\bten\b/gi, '10')
+    .replace(/\bii\b/gi, '2')
+    .replace(/\biii\b/gi, '3')
+    .replace(/\biv\b/gi, '4')
+    .replace(/\bvi\b/gi, '6')
+    .replace(/\bvii\b/gi, '7')
+    .replace(/\bviii\b/gi, '8')
+    .replace(/\bix\b/gi, '9');
+}
+
 /**
  * Normalization & Clean Keyword Extraction
  */
@@ -28,10 +61,10 @@ function cleanTitleKeywords(raw) {
   let s = raw;
   // Remove quality tags
   s = s.replace(/\b(4k|2160p|1080p|720p|480p|hevc|x264|x265|10bit|bluray|remux|web-dl|webrip|hdrip|dvdrip|hdtc|camrip)\b/gi, ' ');
-  // Remove audio & source tags
-  s = s.replace(/\b(hindi|english|tamil|telugu|korean|dual audio|multi audio|org|dubbed|esubs|subtitles|line|nf|netflix|hotstar|zee5|sonyliv|marvel phase \d+)\b/gi, ' ');
-  // Remove format tags
-  s = s.replace(/\b(full movie|movie|series|season \d+|s\d+|ep \d+|ep-\d+|added|imax|extended|uncut|directors cut)\b/gi, ' ');
+  // Remove audio & source & network tags
+  s = s.replace(/\b(hindi|english|tamil|telugu|malayalam|kannada|korean|dual audio|multi audio|org|dubbed|esubs|subtitles|line|nf|netflix|hotstar|zee5|sonyliv|prime video|amazon prime|amazon|prime|apple|paramount|hulu|disney|peacock|max|hbo|mgm|mgmp|marvel phase \d+)\b/gi, ' ');
+  // Remove format & completion tags
+  s = s.replace(/\b(full movie|complete|all episodes|movie|series|season \d+|season\s*\d+\s*[-–to]+\s*\d+|s\d+|ep \d+|ep-\d+|added|imax|extended|uncut|directors cut)\b/gi, ' ');
   return normalizeString(s);
 }
 
@@ -78,10 +111,10 @@ function calculateTitleMatchScore(
   targetSeason = null,
   candidateUrl = ''
 ) {
-  const normTarget = normalizeString(targetTitle);
-  const cleanTarget = cleanTitleKeywords(targetTitle);
-  const normCandidate = normalizeString(candidateTitle);
-  const cleanCandidate = cleanTitleKeywords(candidateTitle);
+  const normTarget = normalizeNumbers(normalizeString(targetTitle));
+  const cleanTarget = normalizeNumbers(cleanTitleKeywords(targetTitle));
+  const normCandidate = normalizeNumbers(normalizeString(candidateTitle));
+  const cleanCandidate = normalizeNumbers(cleanTitleKeywords(candidateTitle));
 
   if (!normTarget || !normCandidate) return 0.0;
 
@@ -118,16 +151,20 @@ function calculateTitleMatchScore(
     return 2.0 * typeMultiplier * seasonMultiplier;
   }
 
-  const targetTokens = cleanTarget.split(' ').filter(t => t.length > 1);
-  const candidateTokens = cleanCandidate.split(' ').filter(t => t.length > 1);
+  const targetTokens = cleanTarget.split(' ').filter(t => t.length > 0);
+  const candidateTokens = cleanCandidate.split(' ').filter(t => t.length > 0);
 
   if (targetTokens.length === 0 || candidateTokens.length === 0) return 0.0;
 
   // 2. Core candidate title matching (candidate tokens without meta/quality/season tokens)
   const metaTokens = new Set([
-    'season', 'series', 'complete', 'all', 'episodes', 'dual', 'audio', 'hindi', 'english',
-    'org', 'web', 'dl', 'bluray', 'hdrip', 'full', 'movie', 'amzn', 'netflix', 'hbo', 'hotstar',
-    'prime', 'video', 'hevc', 'x264', 'x265', '1080p', '720p', '480p', '2160p', '4k', 'remux'
+    'season', 'series', 'complete', 'all', 'episodes', 'episode', 'pack', 'dual', 'audio', 'hindi', 'english',
+    'tamil', 'telugu', 'malayalam', 'kannada', 'korean', 'japanese', 'chinese', 'french', 'spanish', 'german',
+    'org', 'web', 'dl', 'bluray', 'hdrip', 'webrip', 'webdl', 'full', 'movie', 'amzn', 'netflix', 'hbo', 'hotstar',
+    'prime', 'video', 'amazon', 'disney', 'sonyliv', 'zee5', 'jio', 'hulu', 'apple', 'appletv', 'paramount',
+    'peacock', 'max', 'mgm', 'mgmp', 'original', 'with', 'subtitles', 'subtitle', 'esub', 'esubs', 'uncut',
+    'extended', 'directors', 'cut', 'edition', 'proper', 'repack', 'hevc', 'x264', 'x265', '1080p', '720p',
+    '480p', '2160p', '4k', 'remux', 'hdr', 'dv', 'atmos', 'dts', 'ddp5', 'dd5'
   ]);
   const filteredCandidateTokens = candidateTokens.filter(t => !metaTokens.has(t) && !/^\d+$/.test(t));
 
@@ -138,7 +175,7 @@ function calculateTitleMatchScore(
   // 3. Target Token Recall: What portion of target words appear in candidate
   let matchedTargetTokens = 0;
   for (const token of targetTokens) {
-    if (candidateTokens.includes(token) || cleanCandidate.includes(token)) {
+    if (candidateTokens.includes(token)) {
       matchedTargetTokens++;
     }
   }
@@ -147,17 +184,11 @@ function calculateTitleMatchScore(
   // 4. Candidate Precision: Avoid false positives on long candidate titles
   let matchedCandidateTokens = 0;
   for (const cToken of candidateTokens) {
-    if (targetTokens.includes(cToken) || cleanTarget.includes(cToken)) {
+    if (targetTokens.includes(cToken)) {
       matchedCandidateTokens++;
     }
   }
   const candidatePrecision = matchedCandidateTokens / candidateTokens.length;
-
-  // Severe penalty for single-word targets (like "From") when candidate has extra non-meta words ("The Girl From Plainville")
-  let precisionWeight = 0.3;
-  if (targetTokens.length === 1 && filteredCandidateTokens.length > 1) {
-    precisionWeight = 0.8;
-  }
 
   // 5. Release Year Comparison
   let yearMultiplier = 1.0;
@@ -170,6 +201,17 @@ function calculateTitleMatchScore(
     else if (diff <= 1) yearMultiplier = 1.0;
     else if (diff <= 3) yearMultiplier = 0.85;
     else yearMultiplier = 0.4; // significant penalty for distant years (e.g. 2001 vs 2026)
+  }
+
+  // 6. Subtitle expansion bonus (e.g. "Stree 2: Sarkate Ka Aatank", "Spider-Man: No Way Home")
+  if (targetRecall === 1.0 && yearMultiplier >= 1.0) {
+    return Math.min(1.7, (1.2 + candidatePrecision * 0.4) * typeMultiplier * seasonMultiplier);
+  }
+
+  // Severe penalty for single-word targets (like "From") when candidate has extra non-meta words ("The Girl From Plainville")
+  let precisionWeight = 0.3;
+  if (targetTokens.length === 1 && filteredCandidateTokens.length > 1) {
+    precisionWeight = 0.8;
   }
 
   const baseScore = (targetRecall * (1 - precisionWeight)) + (candidatePrecision * precisionWeight);
@@ -205,6 +247,40 @@ function findBestMatch(targetTitle, targetYear, targetType = 'movie', candidates
   return null;
 }
 
+function safeBase64Decode(str) {
+  if (!str) return '';
+  try {
+    if (typeof atob === 'function') {
+      return atob(str.trim());
+    }
+  } catch (e) {}
+  try {
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(str.trim(), 'base64').toString('utf8');
+    }
+  } catch (e) {}
+  try {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    let output = '';
+    let input = (str || '').replace(/[^A-Za-z0-9\+\/\=]/g, '');
+    let i = 0;
+    while (i < input.length) {
+      const enc1 = chars.indexOf(input.charAt(i++));
+      const enc2 = chars.indexOf(input.charAt(i++));
+      const enc3 = chars.indexOf(input.charAt(i++));
+      const enc4 = chars.indexOf(input.charAt(i++));
+      const chr1 = (enc1 << 2) | (enc2 >> 4);
+      const chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+      const chr3 = ((enc3 & 3) << 6) | enc4;
+      output += String.fromCharCode(chr1);
+      if (enc3 !== 64 && enc3 !== -1) output += String.fromCharCode(chr2);
+      if (enc4 !== 64 && enc4 !== -1) output += String.fromCharCode(chr3);
+    }
+    return output;
+  } catch (e) {}
+  return '';
+}
+
 function rot13(str) {
   return (str || '').replace(/[a-zA-Z]/g, function(c) {
     return String.fromCharCode(
@@ -218,26 +294,15 @@ function rot13(str) {
 function decodeGreenmountToken(token) {
   if (!token) return null;
   try {
-    let d1 = typeof atob === 'function' ? atob(token) : Buffer.from(token, 'base64').toString('utf8');
-    let d2 = typeof atob === 'function' ? atob(d1) : Buffer.from(d1, 'base64').toString('utf8');
+    let d1 = safeBase64Decode(token);
+    let d2 = safeBase64Decode(d1);
     let d3 = rot13(d2);
-    let d4 = typeof atob === 'function' ? atob(d3) : Buffer.from(d3, 'base64').toString('utf8');
+    let d4 = safeBase64Decode(d3);
     const json = JSON.parse(d4);
     if (json && json.o) {
-      return typeof atob === 'function' ? atob(json.o) : Buffer.from(json.o, 'base64').toString('utf8');
+      return safeBase64Decode(json.o);
     }
-  } catch(e) {
-    try {
-      let d1 = Buffer.from(token, 'base64').toString('utf8');
-      let d2 = Buffer.from(d1, 'base64').toString('utf8');
-      let d3 = rot13(d2);
-      let d4 = Buffer.from(d3, 'base64').toString('utf8');
-      const json = JSON.parse(d4);
-      if (json && json.o) {
-        return Buffer.from(json.o, 'base64').toString('utf8');
-      }
-    } catch(e2) {}
-  }
+  } catch(e) {}
   return null;
 }
 
@@ -317,6 +382,8 @@ var ClientUtils = class {
       "gamerxyt.com",
       "hubdrive.",
       "greenmount.",
+      "greenmotors.",
+      "homelander",
       "linksdrive.",
       "ceciliacdn.",
       "google.com/search",
@@ -494,17 +561,18 @@ var ClientUtils = class {
     if (!Array.isArray(candidateList) || candidateList.length === 0) return null;
     for (const item of candidateList) {
       if (item && item.url) {
-        const isLive = await this.verifyMediaStream(item.url, headers, 2500);
+        const isLive = await this.verifyMediaStream(item.url, headers, 3000);
         if (isLive) {
           const detectedQ = this.detectQualityFromUrl(item.url, fallbackQuality);
           return { q: detectedQ, url: item.url, item };
         }
       }
     }
-    // Fallback: Return first candidate if pre-flights didn't succeed
-    const first = candidateList[0];
-    if (first && first.url) {
-      return { q: this.detectQualityFromUrl(first.url, fallbackQuality), url: first.url, item: first };
+    // Fallback: Return highest-priority valid candidate (avoid known 403 endpoints)
+    const validCandidates = candidateList.filter(c => c && c.url && !c.url.includes('googleusercontent.com'));
+    const chosen = validCandidates[0] || candidateList[0];
+    if (chosen && chosen.url) {
+      return { q: this.detectQualityFromUrl(chosen.url, fallbackQuality), url: chosen.url, item: chosen };
     }
     return null;
   }
@@ -665,8 +733,8 @@ var ClientUtils = class {
     const results = [];
     let currentUrl = startUrl;
     try {
-      // 1. Unwrap Greenmount / Homelander intermediate bridges
-      if (currentUrl.includes("greenmount.") || currentUrl.includes("homelander")) {
+      // 1. Unwrap Greenmount / Greenmotors / Homelander intermediate bridges
+      if (currentUrl.includes("greenmount.") || currentUrl.includes("greenmotors.") || currentUrl.includes("homelander")) {
         try {
           const gHtml = await this.httpGet(currentUrl, startUrl);
           const tokenMatch = gHtml.match(/s\(['"]o['"],\s*['"]([^'"]+)['"]/i);
@@ -677,7 +745,7 @@ var ClientUtils = class {
             }
           }
         } catch (gErr) {
-          console.warn("[ClientUtils] Greenmount unwrap error:", gErr?.message || gErr);
+          console.warn("[ClientUtils] Greenmount/Greenmotors unwrap error:", gErr?.message || gErr);
         }
       }
 
@@ -685,9 +753,45 @@ var ClientUtils = class {
       if (currentUrl.includes("hblinks.")) {
         try {
           const hHtml = await this.httpGet(currentUrl, startUrl);
-          const m = hHtml.match(/href=["'](https?:\/\/[^"']*(?:hubcloud|hubdrive)[^"']*)["']/i);
-          if (m && m[1]) {
-            currentUrl = m[1];
+          const aMatches = [...hHtml.matchAll(/<a\s+[^>]*href=["'](https?:\/\/[^"']*(?:hubcloud|hubdrive|hubcdn|drive)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)];
+          let selected = null;
+          if (aMatches.length > 0) {
+            const is4K = qualityHint === '4k' || qualityHint === '2160p';
+            const is1080p = qualityHint === '1080p';
+            const is720p = qualityHint === '720p';
+
+            const candidates = aMatches.map(m => {
+              const url = m[1];
+              const text = m[2].replace(/<[^>]+>/g, '').trim();
+              const pos = m.index;
+              const pre = hHtml.substring(Math.max(0, pos - 200), pos).replace(/<[^>]+>/g, ' ');
+              const combined = `${text} ${pre}`.toLowerCase();
+              return { url, text, combined };
+            });
+
+            if (is4K) {
+              selected = candidates.find(c => /\b(2160p|4k|uhd|sdr|hdr|dv)\b/i.test(c.combined));
+            } else if (is1080p) {
+              selected = candidates.find(c => /\b(1080p|fhd|hevc|10bit)\b/i.test(c.combined) && !/\b(2160p|4k)\b/i.test(c.combined)) ||
+                         candidates.find(c => /\b1080p\b/i.test(c.combined));
+            } else if (is720p) {
+              selected = candidates.find(c => /\b720p\b/i.test(c.combined));
+            }
+
+            if (!selected) {
+              selected = candidates.find(c => /\b(2160p|4k)\b/i.test(c.combined)) ||
+                         candidates.find(c => /\b1080p\b/i.test(c.combined)) ||
+                         candidates.find(c => /\b720p\b/i.test(c.combined)) ||
+                         candidates[0];
+            }
+          }
+          if (selected && selected.url) {
+            currentUrl = selected.url;
+          } else {
+            const m = hHtml.match(/href=["'](https?:\/\/[^"']*(?:hubcloud|hubdrive)[^"']*)["']/i);
+            if (m && m[1]) {
+              currentUrl = m[1];
+            }
           }
         } catch (hErr) {
           console.warn("[ClientUtils] HBLinks unwrap error:", hErr?.message || hErr);
@@ -880,7 +984,7 @@ var ClientUtils = class {
             type: "direct",
             headers: defaultHeaders,
             mimeType: this.detectMimeType(directUrl),
-            priority: 1
+            priority: 6
           });
         }
       }
@@ -954,7 +1058,7 @@ function parseMediaBridges(html, pageTitle = '') {
   const episodeMap = new Map(); // key: "s-e" -> array of { seasonNumber, episodeNumber, quality, sizeMB, url, label }
   const movieBridges = []; // array of { quality, sizeMB, url, label }
 
-  const aRegex = /<a\s+[^>]*href=["'](https?:\/\/[^"']*(?:hubdrive|hubcloud|greenmount|hubcdn|gamerxyt|gadgets|fastdrive|drive)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const aRegex = /<a\s+[^>]*href=["'](https?:\/\/[^"']*(?:hubdrive|hubcloud|greenmount|greenmotors|homelander|hubcdn|gamerxyt|gadgets|fastdrive|drive)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let aMatch;
 
   while ((aMatch = aRegex.exec(cleanHtml)) !== null) {
@@ -995,34 +1099,46 @@ function parseMediaBridges(html, pageTitle = '') {
     const linkEpMatch = linkText.match(/\b(?:Episode|EP|Ep)[\s._-]*0*(\d{1,2})\b/i) ||
                         linkText.match(/\bE[\s._-]*0*(\d{1,2})\b/i);
 
+    const seRegex = /\bS0*(\d{1,2})[\s._-]*E(?:P|pisode)?0*(\d{1,2})\b|\bSeason\s*0*(\d{1,2})[\s._-]*Episode\s*0*(\d{1,2})\b/gi;
+    let lastSeMatch = null;
+    let sem;
+    while ((sem = seRegex.exec(precedingContext)) !== null) {
+      lastSeMatch = sem;
+    }
+
+    const sHeaderRegex = /\b(?:Season|S)\s*0*(\d{1,2})\b/gi;
+    let lastSHeaderMatch = null;
+    let shm;
+    while ((shm = sHeaderRegex.exec(precedingContext)) !== null) {
+      lastSHeaderMatch = shm;
+    }
+
     let seasonNum = defaultPageSeason;
     let epNum = null;
 
     if (linkSeMatch) {
       seasonNum = parseInt(linkSeMatch[1], 10);
       epNum = parseInt(linkSeMatch[2], 10);
+    } else if (lastSeMatch) {
+      seasonNum = parseInt(lastSeMatch[1] || lastSeMatch[3], 10);
+      epNum = parseInt(lastSeMatch[2] || lastSeMatch[4], 10);
     } else if (linkEpMatch) {
       epNum = parseInt(linkEpMatch[1], 10);
-    } else {
-      const seRegex = /\bS0*(\d{1,2})[\s._-]*E(?:P|pisode)?0*(\d{1,2})\b/gi;
-      let lastSeMatch = null;
-      let sem;
-      while ((sem = seRegex.exec(precedingContext)) !== null) {
-        lastSeMatch = sem;
+      if (lastSHeaderMatch) {
+        seasonNum = parseInt(lastSHeaderMatch[1], 10);
       }
-
+    } else {
       const epRegex = /\b(?:Episode|EP|Ep)[\s._-]*0*(\d{1,2})\b/gi;
       let lastEpMatch = null;
       let em;
       while ((em = epRegex.exec(precedingContext)) !== null) {
         lastEpMatch = em;
       }
-
-      if (lastSeMatch && (!lastEpMatch || lastSeMatch.index >= lastEpMatch.index)) {
-        seasonNum = parseInt(lastSeMatch[1], 10);
-        epNum = parseInt(lastSeMatch[2], 10);
-      } else if (lastEpMatch) {
+      if (lastEpMatch) {
         epNum = parseInt(lastEpMatch[1], 10);
+        if (lastSHeaderMatch) {
+          seasonNum = parseInt(lastSHeaderMatch[1], 10);
+        }
       }
     }
 
@@ -1073,20 +1189,28 @@ function parseMediaBridges(html, pageTitle = '') {
       }
     }
 
-    // Fidelity tag matching & scoring (x265, HEVC, HDR, DV, 10-bit, Remux, BluRay)
-    const targetKeywords = ['x265', 'hevc', 'hdr', 'dv', 'dolby vision', '10bit', '10-bit', 'atmos', 'dts', 'ddp5.1', 'x264', 'h.264', 'h.265', 'web-dl', 'bluray', 'remux'];
+    // Fidelity tag matching & scoring (x265, HEVC, HDR, SDR, DV, Multi, 10-bit, Remux, BluRay)
+    const targetKeywords = [
+      'hevc', 'hdr', 'hdr10', 'hdr10+', 'sdr', 'dv', 'dolby vision', 'multi audio', 'multi', 'dual audio', 
+      'x265', 'x264', 'h.265', 'h.264', '10bit', '10-bit', 'atmos', 'dts', 'ddp5.1', 'web-dl', 'bluray', 'remux'
+    ];
+    const highExtensionSet = new Set(['hevc', 'hdr', 'hdr10', 'hdr10+', 'sdr', 'dv', 'dolby vision', 'multi audio', 'multi', 'dual audio', 'x265', 'x264', 'h.265', 'h.264', '10bit', '10-bit']);
     const matchedTags = [];
+    let highExtMatches = 0;
     const lowerCombined = combined.toLowerCase();
     for (const kw of targetKeywords) {
       if (lowerCombined.includes(kw)) {
         matchedTags.push(kw.toUpperCase());
+        if (highExtensionSet.has(kw)) {
+          highExtMatches++;
+        }
       }
     }
     
-    // Resolution base score
-    const resScore = quality === '4k' ? 400 : (quality === '1080p' ? 250 : 100);
-    const tagScore = matchedTags.length * 20;
-    const sizeScore = Math.min(100, Math.round(sizeMB / 100));
+    // Resolution base score (4K: 500, 1080p: 250, 720p: 100)
+    const resScore = quality === '4k' ? 500 : (quality === '1080p' ? 250 : 100);
+    const tagScore = matchedTags.length * 25 + (highExtMatches > 0 ? 50 : 0);
+    const sizeScore = Math.min(150, Math.round(sizeMB / 100));
     const totalScore = resScore + tagScore + sizeScore;
 
     const bridgeObj = {
@@ -1323,22 +1447,21 @@ var HDHub4uClient = class {
           );
         }
 
-        if (fourK.length > 0) {
-          resolvePromises.push(
-            (async () => {
-              for (const b of fourK.slice(0, 4)) {
-                try {
-                  const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
-                  const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
-                  if (live && live.url) {
-                    qualities[live.q] = live.url;
-                    if (live.q === '4k') break;
-                  }
-                } catch (e) {}
-              }
-            })()
-          );
-        }
+        const fourKCandidates = fourK.length > 0 ? fourK : exactBridges;
+        resolvePromises.push(
+          (async () => {
+            for (const b of fourKCandidates.slice(0, 4)) {
+              try {
+                const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
+                const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
+                if (live && live.url) {
+                  qualities[live.q] = live.url;
+                  if (live.q === '4k') break;
+                }
+              } catch (e) {}
+            }
+          })()
+        );
 
         if (sevenTwenty.length > 0) {
           resolvePromises.push(
@@ -1372,10 +1495,10 @@ var HDHub4uClient = class {
           }
         }
 
-        // STRICT PRIORITIZATION: 1080p first, then 4K, then 720p
-        const primaryUrl = qualities['1080p'] || qualities['4k'] || qualities['720p'] || Object.values(qualities)[0];
+        // 4K Quality Prioritization: 4K first, then 1080p, then 720p
+        const primaryUrl = qualities['4k'] || qualities['2160p'] || qualities['1080p'] || qualities['720p'] || Object.values(qualities)[0];
         if (primaryUrl) {
-          const chosenQuality = qualities['1080p'] ? '1080p' : (qualities['4k'] ? '4K' : (qualities['720p'] ? '720p' : '1080p'));
+          const chosenQuality = (qualities['4k'] || qualities['2160p']) ? '4K' : (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : '1080p'));
           return {
             title: `${title} - Season ${targetSeason} Episode ${targetEp}`,
             seasonNumber: targetSeason,
@@ -1385,7 +1508,7 @@ var HDHub4uClient = class {
             headers: defaultHeaders,
             mimeType: ClientUtils.detectMimeType(primaryUrl),
             quality: chosenQuality,
-            server: qualities['1080p'] ? 'Download [Server : 10Gbps 1080p] (Direct CDN Stream)' : (qualities['4k'] ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : 'Download [Server : 10Gbps] (Direct CDN Stream)')
+            server: (qualities['4k'] || qualities['2160p']) ? 'Download [Server : 10Gbps 4K] (Direct CDN Stream)' : (qualities['1080p'] ? 'Download [Server : 10Gbps 1080p] (Direct CDN Stream)' : 'Download [Server : 10Gbps] (Direct CDN Stream)')
           };
         }
       }
@@ -1459,27 +1582,26 @@ var HDHub4uClient = class {
         );
       }
 
-      if (fourK.length > 0) {
-        resolvePromises.push(
-          (async () => {
-            const topBridges = fourK.slice(0, 3);
-            const resolved = await Promise.any(
-              topBridges.map(async (b) => {
-                const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
-                const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
-                if (live && live.url) {
-                  return { q: live.q, url: live.url };
-                }
-                throw new Error("No 4k stream");
-              })
-            ).catch(() => null);
+      const fourKCandidates = fourK.length > 0 ? fourK : targetMovieBridges;
+      resolvePromises.push(
+        (async () => {
+          const topBridges = fourKCandidates.slice(0, 3);
+          const resolved = await Promise.any(
+            topBridges.map(async (b) => {
+              const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
+              const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
+              if (live && live.url) {
+                return { q: live.q, url: live.url };
+              }
+              throw new Error("No 4k stream");
+            })
+          ).catch(() => null);
 
-            if (resolved && resolved.url) {
-              qualities[resolved.q || '4k'] = resolved.url;
-            }
-          })()
-        );
-      }
+          if (resolved && resolved.url) {
+            qualities[resolved.q || '4k'] = resolved.url;
+          }
+        })()
+      );
 
       if (sevenTwenty.length > 0) {
         resolvePromises.push(
@@ -1518,10 +1640,10 @@ var HDHub4uClient = class {
         }
       }
 
-      // STRICT PRIORITIZATION: 1080p first, then 4K, then 720p
-      const primaryUrl = qualities['1080p'] || qualities['4k'] || qualities['720p'] || Object.values(qualities)[0];
+      // 4K Quality Prioritization: 4K first, then 1080p, then 720p
+      const primaryUrl = qualities['4k'] || qualities['2160p'] || qualities['1080p'] || qualities['720p'] || Object.values(qualities)[0];
       if (primaryUrl) {
-        const chosenQuality = qualities['1080p'] ? '1080p' : (qualities['4k'] ? '4K' : (qualities['720p'] ? '720p' : '1080p'));
+        const chosenQuality = (qualities['4k'] || qualities['2160p']) ? '4K' : (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : '1080p'));
         return {
           title,
           streamUrl: primaryUrl,
@@ -1529,7 +1651,7 @@ var HDHub4uClient = class {
           headers: defaultHeaders,
           mimeType: ClientUtils.detectMimeType(primaryUrl),
           quality: chosenQuality,
-          server: qualities['1080p'] ? 'Download [FSL 1080p Server] (10Gbps Cloudflare R2 Direct)' : (qualities['4k'] ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : 'Download [FSL Server] (10Gbps Cloudflare R2 Direct)')
+          server: (qualities['4k'] || qualities['2160p']) ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : (qualities['1080p'] ? 'Download [FSL 1080p Server] (10Gbps Cloudflare R2 Direct)' : 'Download [FSL Server] (10Gbps Cloudflare R2 Direct)')
         };
       }
     }
@@ -1730,22 +1852,21 @@ var FourKHDHubClient = class {
           );
         }
 
-        if (fourK.length > 0) {
-          resolvePromises.push(
-            (async () => {
-              for (const b of fourK.slice(0, 4)) {
-                try {
-                  const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
-                  const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
-                  if (live && live.url) {
-                    qualities[live.q] = live.url;
-                    if (live.q === '4k') break;
-                  }
-                } catch (e) {}
-              }
-            })()
-          );
-        }
+        const fourKCandidates = fourK.length > 0 ? fourK : exactBridges;
+        resolvePromises.push(
+          (async () => {
+            for (const b of fourKCandidates.slice(0, 4)) {
+              try {
+                const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
+                const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
+                if (live && live.url) {
+                  qualities[live.q] = live.url;
+                  if (live.q === '4k') break;
+                }
+              } catch (e) {}
+            }
+          })()
+        );
 
         if (sevenTwenty.length > 0) {
           resolvePromises.push(
@@ -1779,10 +1900,10 @@ var FourKHDHubClient = class {
           }
         }
 
-        // STRICT PRIORITIZATION: 1080p first, then 4K, then 720p
-        const primaryUrl = qualities['1080p'] || qualities['4k'] || qualities['720p'] || Object.values(qualities)[0];
+        // 4K Quality Prioritization: 4K first, then 1080p, then 720p
+        const primaryUrl = qualities['4k'] || qualities['2160p'] || qualities['1080p'] || qualities['720p'] || Object.values(qualities)[0];
         if (primaryUrl) {
-          const chosenQuality = qualities['1080p'] ? '1080p' : (qualities['4k'] ? '4K' : (qualities['720p'] ? '720p' : '1080p'));
+          const chosenQuality = (qualities['4k'] || qualities['2160p']) ? '4K' : (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : '1080p'));
           return {
             title: `${title} - Season ${targetSeason} Episode ${targetEp}`,
             seasonNumber: targetSeason,
@@ -1792,7 +1913,7 @@ var FourKHDHubClient = class {
             headers: defaultHeaders,
             mimeType: ClientUtils.detectMimeType(primaryUrl),
             quality: chosenQuality,
-            server: qualities['1080p'] ? 'Download [Server : 10Gbps 1080p] (Direct CDN Stream)' : (qualities['4k'] ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : 'Download [Server : 10Gbps] (Direct CDN Stream)')
+            server: (qualities['4k'] || qualities['2160p']) ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : (qualities['1080p'] ? 'Download [Server : 10Gbps 1080p] (Direct CDN Stream)' : 'Download [Server : 10Gbps] (Direct CDN Stream)')
           };
         }
       }
@@ -1866,27 +1987,26 @@ var FourKHDHubClient = class {
         );
       }
 
-      if (fourK.length > 0) {
-        resolvePromises.push(
-          (async () => {
-            const topBridges = fourK.slice(0, 3);
-            const resolved = await Promise.any(
-              topBridges.map(async (b) => {
-                const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
-                const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
-                if (live && live.url) {
-                  return { q: live.q, url: live.url };
-                }
-                throw new Error("No 4k stream");
-              })
-            ).catch(() => null);
+      const fourKCandidates = fourK.length > 0 ? fourK : targetMovieBridges;
+      resolvePromises.push(
+        (async () => {
+          const topBridges = fourKCandidates.slice(0, 3);
+          const resolved = await Promise.any(
+            topBridges.map(async (b) => {
+              const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
+              const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
+              if (live && live.url) {
+                return { q: live.q, url: live.url };
+              }
+              throw new Error("No 4k stream");
+            })
+          ).catch(() => null);
 
-            if (resolved && resolved.url) {
-              qualities[resolved.q || '4k'] = resolved.url;
-            }
-          })()
-        );
-      }
+          if (resolved && resolved.url) {
+            qualities[resolved.q || '4k'] = resolved.url;
+          }
+        })()
+      );
 
       if (sevenTwenty.length > 0) {
         resolvePromises.push(
@@ -1925,10 +2045,10 @@ var FourKHDHubClient = class {
         }
       }
 
-      // STRICT PRIORITIZATION: 1080p first, then 4K, then 720p
-      const primaryUrl = qualities['1080p'] || qualities['4k'] || qualities['720p'] || Object.values(qualities)[0];
+      // 4K Quality Prioritization: 4K first, then 1080p, then 720p
+      const primaryUrl = qualities['4k'] || qualities['2160p'] || qualities['1080p'] || qualities['720p'] || Object.values(qualities)[0];
       if (primaryUrl) {
-        const chosenQuality = qualities['1080p'] ? '1080p' : (qualities['4k'] ? '4K' : (qualities['720p'] ? '720p' : '1080p'));
+        const chosenQuality = (qualities['4k'] || qualities['2160p']) ? '4K' : (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : '1080p'));
         return {
           title,
           streamUrl: primaryUrl,
@@ -1936,7 +2056,7 @@ var FourKHDHubClient = class {
           headers: defaultHeaders,
           mimeType: ClientUtils.detectMimeType(primaryUrl),
           quality: chosenQuality,
-          server: qualities['1080p'] ? 'Download [FSL 1080p Server] (10Gbps Cloudflare R2 Direct)' : (qualities['4k'] ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : 'Download [FSL Server] (10Gbps Cloudflare R2 Direct)')
+          server: (qualities['4k'] || qualities['2160p']) ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : (qualities['1080p'] ? 'Download [FSL 1080p Server] (10Gbps Cloudflare R2 Direct)' : 'Download [FSL Server] (10Gbps Cloudflare R2 Direct)')
         };
       }
     }

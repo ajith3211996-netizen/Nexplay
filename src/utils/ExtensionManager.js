@@ -43,7 +43,7 @@ class ExtensionManagerService {
   async getSearchPosts(provider, searchQuery) {
     console.log(`[ExtensionManager] Native search: "${searchQuery}" on ${provider}`);
     try {
-      const engine = provider === 'movies4u' ? Movies4u : (provider === 'hdhub4u' ? HDHub4u : FourKHDHub);
+      const engine = provider === 'movies4u' ? Movies4u : (provider === '4khdhub' ? FourKHDHub : HDHub4u);
       const results = await engine.search(searchQuery);
       return results.map(r => ({
         title: r.title,
@@ -58,25 +58,7 @@ class ExtensionManagerService {
       }));
     } catch (err) {
       console.warn(`[ExtensionManager] Error searching ${provider}:`, err?.message || err);
-      // Try alternate provider fallback
-      const altEngine = provider === 'hdhub4u' ? FourKHDHub : HDHub4u;
-      const altProvider = provider === 'hdhub4u' ? '4khdhub' : 'hdhub4u';
-      try {
-        const altResults = await altEngine.search(searchQuery);
-        return altResults.map(r => ({
-          title: r.title,
-          cleanTitle: r.cleanTitle || cleanTitleKeywords(r.title),
-          link: r.url,
-          image: r.thumbnail,
-          quality: r.quality,
-          year: r.year,
-          type: r.type || (r.url?.includes('-series-') ? 'series' : 'movie'),
-          mediaType: r.mediaType || (r.url?.includes('-series-') ? 'tv' : 'movie'),
-          provider: altProvider
-        }));
-      } catch (e2) {
-        return [];
-      }
+      return [];
     }
   }
 
@@ -84,60 +66,88 @@ class ExtensionManagerService {
    * Smart Media Matcher:
    * Finds the authentic matching movie or TV show across providers with confidence threshold.
    */
-  async findBestMatchingMedia({ provider, targetTitle, targetYear, isTVShow, seasonNumber = 1, originalLanguage, isIndianRegion }) {
+  async findBestMatchingMedia({ provider = 'hdhub4u', targetTitle, targetYear, isTVShow, seasonNumber = 1, originalLanguage, isIndianRegion }) {
     const cleanTitle = (targetTitle || '')
       .replace(/[:\-–—]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
     const targetType = isTVShow ? 'tv' : 'movie';
-    const INDIAN_LANGS = ['ta', 'hi', 'te', 'ml', 'kn', 'mr', 'pa', 'bn', 'gu', 'or', 'as'];
-    const isIndian = isIndianRegion || (originalLanguage && INDIAN_LANGS.includes(originalLanguage.toLowerCase()));
-    
-    const defaultProvider = provider === 'movies4u' ? 'movies4u' : (isIndian ? 'hdhub4u' : '4khdhub');
-    const primaryProvider = provider || defaultProvider;
-    const allProviders = ['movies4u', '4khdhub', 'hdhub4u'];
-    const searchOrder = [primaryProvider, ...allProviders.filter(p => p !== primaryProvider)];
-
-    console.log(`[ExtensionManager] Multi-Provider Search for: "${cleanTitle}" (${targetYear || 'N/A'}, Type: ${targetType}${isTVShow ? `, Season: ${seasonNumber}` : ''}) [${searchOrder.join(' -> ')}]`);
-
     const targetSeason = isTVShow ? seasonNumber : null;
+    const activeProvider = provider || 'hdhub4u';
 
-    let primaryQuery = cleanTitle;
+    console.log(`[ExtensionManager] Strict Single-Provider Search on ${activeProvider} for: "${cleanTitle}" (${targetYear || 'N/A'}, Type: ${targetType}${isTVShow ? `, Season: ${seasonNumber}` : ''})`);
+
+    const digitTitle = cleanTitle
+      .replace(/\bpart\s+(?:one|1)\b/gi, 'part 1')
+      .replace(/\bpart\s+(?:two|2)\b/gi, 'part 2')
+      .replace(/\bpart\s+(?:three|3)\b/gi, 'part 3')
+      .replace(/\bpart\s+(?:four|4)\b/gi, 'part 4')
+      .replace(/\bone\b/gi, '1')
+      .replace(/\btwo\b/gi, '2')
+      .replace(/\bthree\b/gi, '3')
+      .replace(/\bfour\b/gi, '4')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const wordTitle = cleanTitle
+      .replace(/\bpart\s+1\b/gi, 'part one')
+      .replace(/\bpart\s+2\b/gi, 'part two')
+      .replace(/\bpart\s+3\b/gi, 'part three')
+      .replace(/\bpart\s+4\b/gi, 'part four')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const rootTitle = cleanTitle
+      .replace(/\b(part|chapter|volume|vol)\s*\d+\b/gi, '')
+      .replace(/\b(part|chapter|volume|vol)\s*(one|two|three|four|five)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const candidateQueries = [];
     if (isTVShow) {
-      primaryQuery = `${cleanTitle} Season ${seasonNumber}`;
-    } else if (targetYear) {
-      primaryQuery = `${cleanTitle} ${targetYear}`;
-    }
-
-    for (const prov of searchOrder) {
-      try {
-        console.log(`[ExtensionManager] Searching on ${prov} for: "${primaryQuery}"`);
-        let results = await this.getSearchPosts(prov, primaryQuery);
-        let match = findBestMatch(cleanTitle, targetYear, targetType, results, 0.55, targetSeason);
-
-        if (match) {
-          console.log(`[ExtensionManager] ✅ Found verified match on ${prov} (Score: ${(match.matchScore * 100).toFixed(1)}%): "${match.title}"`);
-          return { match, provider: prov };
-        }
-
-        // Fallback to base clean title on this provider if primaryQuery differed
-        if (primaryQuery !== cleanTitle) {
-          console.log(`[ExtensionManager] Query "${primaryQuery}" yielded no match on ${prov}. Trying base query: "${cleanTitle}"`);
-          results = await this.getSearchPosts(prov, cleanTitle);
-          match = findBestMatch(cleanTitle, targetYear, targetType, results, 0.55, targetSeason);
-
-          if (match) {
-            console.log(`[ExtensionManager] ✅ Found verified match on ${prov} (Score: ${(match.matchScore * 100).toFixed(1)}%): "${match.title}"`);
-            return { match, provider: prov };
-          }
-        }
-      } catch (e) {
-        console.warn(`[ExtensionManager] Error searching ${prov}:`, e?.message || e);
+      candidateQueries.push(`${cleanTitle} (Season ${seasonNumber})`);
+      candidateQueries.push(`${cleanTitle} Season ${seasonNumber}`);
+      if (digitTitle !== cleanTitle) {
+        candidateQueries.push(`${digitTitle} (Season ${seasonNumber})`);
+        candidateQueries.push(`${digitTitle} Season ${seasonNumber}`);
+      }
+      candidateQueries.push(`${cleanTitle} (S0${seasonNumber})`);
+      candidateQueries.push(`${cleanTitle} (S${seasonNumber})`);
+      candidateQueries.push(`${cleanTitle} S${seasonNumber}`);
+      candidateQueries.push(cleanTitle);
+      if (digitTitle !== cleanTitle) candidateQueries.push(digitTitle);
+    } else {
+      candidateQueries.push(cleanTitle);
+      if (digitTitle !== cleanTitle) candidateQueries.push(digitTitle);
+      if (wordTitle !== cleanTitle) candidateQueries.push(wordTitle);
+      if (targetYear) {
+        candidateQueries.push(`${cleanTitle} ${targetYear}`);
+        if (digitTitle !== cleanTitle) candidateQueries.push(`${digitTitle} ${targetYear}`);
+      }
+      if (rootTitle && rootTitle.length > 2 && rootTitle !== cleanTitle) {
+        candidateQueries.push(rootTitle);
       }
     }
 
-    console.warn(`[ExtensionManager] ⚠️ No verified stream match found for "${cleanTitle}" (${targetYear || ''}${isTVShow ? `, Season: ${seasonNumber}` : ''}, Type: ${targetType}) on any provider.`);
+    const uniqueQueries = Array.from(new Set(candidateQueries));
+
+    for (const query of uniqueQueries) {
+      try {
+        console.log(`[ExtensionManager] Searching on ${activeProvider} with query: "${query}"`);
+        const results = await this.getSearchPosts(activeProvider, query);
+        const match = findBestMatch(cleanTitle, targetYear, targetType, results, 0.55, targetSeason);
+
+        if (match) {
+          console.log(`[ExtensionManager] ✅ Found verified match on ${activeProvider} (Score: ${(match.matchScore * 100).toFixed(1)}%): "${match.title}"`);
+          return { match, provider: activeProvider };
+        }
+      } catch (e) {
+        console.warn(`[ExtensionManager] Error searching ${activeProvider} for "${query}":`, e?.message || e);
+      }
+    }
+
+    console.warn(`[ExtensionManager] ⚠️ No verified stream match found for "${cleanTitle}" on ${activeProvider}.`);
     return null;
   }
 
@@ -177,6 +187,12 @@ class ExtensionManagerService {
   async getStream(provider, link, type = 'movie', episodeNumber = 1, seasonNumber = 1) {
     const isTV = type === 'series' || type === 'tv';
     console.log(`[ExtensionManager] Native resolve direct stream: ${link}${isTV ? ` (Season ${seasonNumber}, Ep ${episodeNumber})` : ' (Movie)'}`);
+    const lower = link.toLowerCase();
+    if (lower.includes('.zip') || lower.includes('.rar') || lower.includes('.7z') || lower.includes('.tar')) {
+      console.warn(`[ExtensionManager] ⚠️ Ignoring archive/zip link: ${link}`);
+      return [];
+    }
+
     if (link.startsWith('http') && (
       link.includes('r2.cloudflarestorage.com') || 
       link.includes('.mkv') || 
@@ -187,7 +203,6 @@ class ExtensionManagerService {
       link.includes('googleusercontent.com') ||
       link.includes('video-downloads')
     )) {
-      const lower = link.toLowerCase();
       let detectedQ = '1080p';
       if (lower.includes('2160') || lower.includes('4k') || lower.includes('uhd')) {
         detectedQ = '4K';
@@ -200,13 +215,31 @@ class ExtensionManagerService {
     if (link.includes('movies4u.') || link.includes('movies4u.clinic') || provider === 'movies4u') {
       const playable = await Movies4u.getPlayableStream(link, isTV, episodeNumber, seasonNumber);
       if (playable && playable.streamUrl) {
-        return [{
-          link: playable.streamUrl,
-          quality: playable.quality || '1080p',
-          server: playable.server || 'Movies4u Direct',
-          headers: playable.headers,
-          mimeType: playable.mimeType
-        }];
+        const streamList = [];
+        if (playable.qualities && Object.keys(playable.qualities).length > 0) {
+          const orderedKeys = ['4k', '2160p', '1080p', '720p', ...Object.keys(playable.qualities).filter(k => !['4k', '2160p', '1080p', '720p'].includes(k))];
+          for (const q of orderedKeys) {
+            if (playable.qualities[q]) {
+              streamList.push({
+                link: playable.qualities[q],
+                quality: (q.toUpperCase() === '4K' || q === '2160p') ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : q)),
+                server: playable.server || 'Movies4u Direct',
+                headers: playable.headers,
+                mimeType: playable.mimeType
+              });
+            }
+          }
+        }
+        if (streamList.length === 0) {
+          streamList.push({
+            link: playable.streamUrl,
+            quality: playable.quality || '4K',
+            server: playable.server || 'Movies4u Direct',
+            headers: playable.headers,
+            mimeType: playable.mimeType
+          });
+        }
+        return streamList;
       }
     }
 
@@ -215,12 +248,12 @@ class ExtensionManagerService {
       if (playable && playable.streamUrl) {
         const streamList = [];
         if (playable.qualities && Object.keys(playable.qualities).length > 0) {
-          const orderedKeys = ['1080p', '4k', '720p', ...Object.keys(playable.qualities).filter(k => !['1080p', '4k', '720p'].includes(k))];
+          const orderedKeys = ['4k', '2160p', '1080p', '720p', ...Object.keys(playable.qualities).filter(k => !['4k', '2160p', '1080p', '720p'].includes(k))];
           for (const q of orderedKeys) {
             if (playable.qualities[q]) {
               streamList.push({
                 link: playable.qualities[q],
-                quality: q.toUpperCase() === '4K' ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : q)),
+                quality: (q.toUpperCase() === '4K' || q === '2160p') ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : q)),
                 server: playable.server || 'Direct Stream',
                 headers: playable.headers,
                 mimeType: playable.mimeType
@@ -231,7 +264,7 @@ class ExtensionManagerService {
         if (streamList.length === 0) {
           streamList.push({
             link: playable.streamUrl,
-            quality: playable.quality || '1080p',
+            quality: playable.quality || '4K',
             server: playable.server || 'Direct Stream',
             headers: playable.headers,
             mimeType: playable.mimeType
@@ -273,82 +306,87 @@ class ExtensionManagerService {
 
     const targetEp = isTVShow ? parseInt(episodeNumber, 10) : 1;
     const targetSeason = isTVShow ? parseInt(seasonNumber, 10) : 1;
+    const activeProvider = provider || 'hdhub4u';
 
-    const INDIAN_LANGS = ['ta', 'hi', 'te', 'ml', 'kn', 'mr', 'pa', 'bn', 'gu', 'or', 'as'];
-    const isIndian = isIndianRegion || (originalLanguage && INDIAN_LANGS.includes(originalLanguage.toLowerCase()));
+    console.log(`[ExtensionManager] Strict Single-Provider Resolve on "${activeProvider}" for "${cleanTitle}" (Type: ${isTVShow ? `TV S${targetSeason}E${targetEp}` : 'Movie'})`);
 
-    // Build intelligent provider priority cascade
-    const allProviders = ['movies4u', '4khdhub', 'hdhub4u'];
-    let priorityOrder = [];
-    if (provider && allProviders.includes(provider)) {
-      priorityOrder = [provider, ...allProviders.filter(p => p !== provider)];
-    } else if (isIndian) {
-      priorityOrder = ['hdhub4u', 'movies4u', '4khdhub'];
-    } else {
-      priorityOrder = ['movies4u', '4khdhub', 'hdhub4u'];
+    // 1. Find best matching media post strictly on this provider
+    const matchedData = await this.findBestMatchingMedia({
+      provider: activeProvider,
+      targetTitle: cleanTitle,
+      targetYear,
+      isTVShow,
+      seasonNumber: targetSeason,
+      originalLanguage,
+      isIndianRegion
+    });
+
+    if (!matchedData || !matchedData.match) {
+      throw new Error(`No matching media post found for "${cleanTitle}" on ${activeProvider}.`);
     }
 
-    console.log(`[ExtensionManager] Dynamic Multi-Provider Cascade for "${cleanTitle}": [${priorityOrder.join(' -> ')}]`);
+    const { match, provider: matchedProvider } = matchedData;
+    console.log(`[ExtensionManager] Found candidate post on ${matchedProvider}: "${match.title}" -> ${match.link}`);
 
-    let lastError = null;
+    // 2. Extract playable stream strictly from this provider
+    const playable = await this.getPlayableStream(
+      matchedProvider,
+      match.link,
+      isTVShow,
+      targetEp,
+      targetSeason
+    );
 
-    for (const currentProvider of priorityOrder) {
-      try {
-        console.log(`[ExtensionManager] ⚡ Attempting stream resolution on provider: ${currentProvider}`);
-        
-        // 1. Find best matching media post on this provider
-        const matchedData = await this.findBestMatchingMedia({
-          provider: currentProvider,
-          targetTitle: cleanTitle,
-          targetYear,
-          isTVShow,
-          seasonNumber: targetSeason,
-          originalLanguage,
-          isIndianRegion
-        });
-
-        if (!matchedData || !matchedData.match) {
-          console.log(`[ExtensionManager] ℹ️ No match found on ${currentProvider} for "${cleanTitle}". Proceeding to next provider...`);
-          continue;
-        }
-
-        const { match, provider: matchedProvider } = matchedData;
-        console.log(`[ExtensionManager] Found candidate post on ${matchedProvider}: "${match.title}" -> ${match.link}`);
-
-        // 2. Extract playable stream from this provider
-        const playable = await this.getPlayableStream(
-          matchedProvider,
-          match.link,
-          isTVShow,
-          targetEp,
-          targetSeason
-        );
-
-        if (playable && playable.streamUrl) {
-          console.log(`[ExtensionManager] ✅ Successfully resolved playable stream from ${matchedProvider} (${playable.quality || '1080p'})!`);
-          const serverLabel = matchedProvider === 'movies4u' ? 'Server 3 (Movies4u)' : (matchedProvider === '4khdhub' ? 'Server 2 (4KHDHub)' : 'Server 1 (HDHub4u)');
-          return {
-            title: match.title,
-            streamUrl: playable.streamUrl,
-            qualities: playable.qualities || {},
-            headers: playable.headers || {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-            },
-            mimeType: playable.mimeType || 'video/x-matroska',
-            quality: playable.quality || '1080p',
-            server: serverLabel,
-            subtitles: playable.subtitles || []
-          };
-        } else {
-          console.warn(`[ExtensionManager] ⚠️ ${matchedProvider} returned no playable stream for "${match.title}". Cascading to next provider...`);
-        }
-      } catch (err) {
-        lastError = err;
-        console.warn(`[ExtensionManager] Error resolving on ${currentProvider}:`, err?.message || err);
-      }
+    if (playable && playable.streamUrl) {
+      console.log(`[ExtensionManager] ✅ Successfully resolved playable stream from ${matchedProvider} (${playable.quality || '1080p'})!`);
+      const serverLabel = matchedProvider === 'movies4u' ? 'Server 3 (Movies4u)' : (matchedProvider === '4khdhub' ? 'Server 2 (4KHDHub)' : 'Server 1 (HDHub4u)');
+      return {
+        title: match.title,
+        streamUrl: playable.streamUrl,
+        qualities: playable.qualities || {},
+        headers: playable.headers || {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        },
+        mimeType: playable.mimeType || 'video/x-matroska',
+        quality: playable.quality || '1080p',
+        server: serverLabel,
+        subtitles: playable.subtitles || []
+      };
     }
 
-    throw new Error(`Could not resolve direct stream for "${cleanTitle}" across all providers.`);
+    throw new Error(`Could not resolve direct stream for "${cleanTitle}" on ${matchedProvider}.`);
+  }
+
+  /**
+   * High-Level Convenience Method to resolve a stream given a media object and server identifier
+   * @param {Object} media TMDB media item or simple object { title/name, release_date/first_air_date, media_type }
+   * @param {number|string} server 1 (HDHub4u), 2 (4KHDHub), 3 (Movies4u) or provider string name
+   * @param {number} seasonNumber Season number for TV shows (default: 1)
+   * @param {number} episodeNumber Episode number for TV shows (default: 1)
+   */
+  async resolveMediaStream(media, server = 1, seasonNumber = 1, episodeNumber = 1) {
+    if (!media) throw new Error("Media object is required.");
+    const isTVShow = media.media_type === 'tv' || (!!media.first_air_date && !media.release_date);
+    const targetTitle = media.title || media.name;
+    const yearStr = media.release_date || media.first_air_date;
+    const targetYear = yearStr ? (typeof yearStr === 'number' ? yearStr : parseInt(yearStr.toString().substring(0, 4), 10)) : undefined;
+
+    let provider = 'hdhub4u';
+    if (server === 2 || server === '2' || server === '4khdhub') {
+      provider = '4khdhub';
+    } else if (server === 3 || server === '3' || server === 'movies4u') {
+      provider = 'movies4u';
+    }
+
+    return this.findAndResolvePlayableStream({
+      targetTitle,
+      targetYear,
+      isTVShow,
+      seasonNumber,
+      episodeNumber,
+      originalLanguage: media.original_language || 'en',
+      provider
+    });
   }
 }
 

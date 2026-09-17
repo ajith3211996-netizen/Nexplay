@@ -10,8 +10,6 @@
  * - Custom DoH Endpoints (RFC 8484 and JSON API supported)
  */
 
-import { NativeModules } from 'react-native';
-
 // Available Direct-IP & Hostname DNS-over-HTTPS (DoH) Providers
 export const DNS_PROVIDERS = {
   GOOGLE: {
@@ -84,7 +82,13 @@ let activeConfig = {
 };
 
 // Sync with native Android SharedPreferences on startup if running inside native app
-const DnsPreference = NativeModules?.DnsPreferenceModule;
+let DnsPreference = null;
+try {
+  if (typeof globalThis !== 'undefined' && globalThis.NativeModules?.DnsPreferenceModule) {
+    DnsPreference = globalThis.NativeModules.DnsPreferenceModule;
+  }
+} catch (e) {}
+
 if (DnsPreference && typeof DnsPreference.getDnsConfig === 'function') {
   DnsPreference.getDnsConfig()
     .then((cfg) => {
