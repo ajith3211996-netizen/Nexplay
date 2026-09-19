@@ -1111,6 +1111,23 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           }
           if (isMounted.current && player) {
             try {
+              player.bufferOptions = {
+                preferredForwardBufferDuration: 120,
+                waitsToMinimizeStalling: false,
+                minBufferForPlayback: 0.5,
+                maxBufferBytes: 0,
+                prioritizeTimeOverSizeThreshold: true,
+              };
+            } catch (bErr) {}
+
+            try {
+              player.seekTolerance = {
+                toleranceBefore: 0.5,
+                toleranceAfter: 0.5,
+              };
+            } catch (sErr) {}
+
+            try {
               player.playbackRate = playbackSpeed || 1.0;
             } catch (e) {}
             player.play();
@@ -1565,9 +1582,14 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         stallsHistoryRef.current = [];
         currentTimeRef.current = target;
         setCurrentTime(target);
-        player.currentTime = target;
         if (typeof player.seekBy === 'function') {
-          try { player.seekBy(10); } catch (_) {}
+          try {
+            player.seekBy(10);
+          } catch (_) {
+            player.currentTime = target;
+          }
+        } else {
+          player.currentTime = target;
         }
       } catch (e) {
         console.warn('[MovieDetailScreen] skipForward error:', e);
@@ -1592,9 +1614,14 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         stallsHistoryRef.current = [];
         currentTimeRef.current = target;
         setCurrentTime(target);
-        player.currentTime = target;
         if (typeof player.seekBy === 'function') {
-          try { player.seekBy(-10); } catch (_) {}
+          try {
+            player.seekBy(-10);
+          } catch (_) {
+            player.currentTime = target;
+          }
+        } else {
+          player.currentTime = target;
         }
       } catch (e) {
         console.warn('[MovieDetailScreen] skipBackward error:', e);

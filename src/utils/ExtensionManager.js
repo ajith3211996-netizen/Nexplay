@@ -426,6 +426,7 @@ class ExtensionManagerService {
 
         if (playable && playable.streamUrl) {
           const isGoogleCdn = (playable.streamUrl || '').includes('googleusercontent.com') || (playable.streamUrl || '').includes('video-downloads');
+          const supports206 = playable.supports206 ?? (!isGoogleCdn && !playable.streamUrl.includes('googleusercontent.com'));
           const serverLabel = matchedProvider === 'movies4u' ? 'Server 3 (Movies4u)' : (matchedProvider === '4khdhub' ? 'Server 2 (4KHDHub)' : 'Server 1 (HDHub4u)');
           const candidateResult = {
             title: match.title,
@@ -437,11 +438,12 @@ class ExtensionManagerService {
             mimeType: playable.mimeType || 'video/x-matroska',
             quality: playable.quality || '1080p',
             server: playable.server || serverLabel,
+            supports206: supports206,
             subtitles: playable.subtitles || []
           };
 
-          // If this is Google CDN (does NOT support HTTP 206 Partial Content), hold it as fallback
-          if (isGoogleCdn) {
+          // If this stream does NOT support HTTP 206 Partial Content (e.g. Google CDN), hold it as fallback
+          if (!supports206 || isGoogleCdn) {
             if (!googleCdnFallback) {
               googleCdnFallback = candidateResult;
             }
@@ -456,7 +458,7 @@ class ExtensionManagerService {
       }
     }
 
-    // If only Google CDN was found on this provider, check other providers for FSL / FSLv2 / Pixeldrain / Watch Online first!
+    // If only non-206 / Google CDN was found on this provider, check other providers for FSL / FSLv2 / Pixeldrain / Watch Online first!
     if (allowCrossProviderFallback) {
       const otherProviders = ['hdhub4u', '4khdhub', 'movies4u'].filter(p => p !== activeProvider);
       for (const alt of otherProviders) {
@@ -473,7 +475,7 @@ class ExtensionManagerService {
             provider: alt,
             allowCrossProviderFallback: false
           });
-          if (altResult && !altResult.streamUrl.includes('googleusercontent.com') && !altResult.streamUrl.includes('video-downloads')) {
+          if (altResult && altResult.supports206 !== false && !altResult.streamUrl.includes('googleusercontent.com') && !altResult.streamUrl.includes('video-downloads')) {
             console.log(`[ExtensionManager] ✅ Alternative provider ${alt} resolved range-supporting stream: [${altResult.server}]!`);
             return altResult;
           }

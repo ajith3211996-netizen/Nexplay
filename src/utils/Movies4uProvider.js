@@ -537,7 +537,7 @@ export class Movies4uClient {
                         }
                     }
                 } catch (e) {}
-                const hasHighPrio = liveCandidates.some(c => c.priority <= 3);
+                const hasHighPrio = liveCandidates.some(c => c.priority <= 3 && c.supports206);
                 if (hasHighPrio && liveCandidates.length >= 2) break;
             }
 
@@ -554,6 +554,7 @@ export class Movies4uClient {
                     mimeType: isHls ? 'application/vnd.apple.mpegurl' : (bestCandidate.mimeType || primaryMime),
                     quality: bestCandidate.quality || '1080p',
                     server: bestCandidate.server || 'Server 3 (Movies4u)',
+                    supports206: bestCandidate.supports206 ?? true,
                     thumbnail: details.thumbnail
                 };
             }
@@ -600,7 +601,7 @@ export class Movies4uClient {
                         }
                     }
                 } catch (bErr) {}
-                const hasHighPrio = liveCandidates.some(c => c.priority <= 3);
+                const hasHighPrio = liveCandidates.some(c => c.priority <= 3 && c.supports206);
                 if (hasHighPrio && liveCandidates.length >= 2) break;
             }
 
@@ -618,6 +619,7 @@ export class Movies4uClient {
                     mimeType: bestCandidate.mimeType || 'video/x-matroska',
                     quality: bestCandidate.quality || '1080p',
                     server: bestCandidate.server || 'Server 3 (Movies4u)',
+                    supports206: bestCandidate.supports206 ?? true,
                     thumbnail: details.thumbnail
                 };
             }
@@ -630,8 +632,8 @@ export class Movies4uClient {
                         const resolved = await this.resolveStream(bridge.url, bridge.quality || '1080p', fetcher);
                         if (resolved.length > 0) {
                             for (const candidateStream of resolved) {
-                                const isLive = await this.verifyMediaStream(candidateStream.url, candidateStream.headers);
-                                if (isLive) {
+                                const check = await this.verifyMediaStream(candidateStream.url, candidateStream.headers);
+                                if (check.isLive) {
                                     return {
                                         title: `${details.title} - S${seasonNumber}E${ep.episodeNumber}`,
                                         mediaType: 'series',
@@ -643,6 +645,7 @@ export class Movies4uClient {
                                         mimeType: candidateStream.mimeType || 'video/x-matroska',
                                         quality: candidateStream.quality || '1080p',
                                         server: candidateStream.server || 'Server 3 (Movies4u)',
+                                        supports206: check.supports206,
                                         thumbnail: details.thumbnail,
                                         backupStreams: resolved.slice(1)
                                     };

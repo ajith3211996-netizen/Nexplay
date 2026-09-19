@@ -1694,7 +1694,8 @@ var HDHub4uClient = class {
                       q: live.q,
                       url: live.url,
                       server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
-                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                      supports206: live.item?.supports206 ?? true
                     });
                     if (live.q === '1080p') break;
                   }
@@ -1717,7 +1718,8 @@ var HDHub4uClient = class {
                       q: live.q,
                       url: live.url,
                       server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
-                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                      supports206: live.item?.supports206 ?? true
                     });
                     if (live.q === '4k') break;
                   }
@@ -1740,7 +1742,8 @@ var HDHub4uClient = class {
                       q: live.q,
                       url: live.url,
                       server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
-                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                      supports206: live.item?.supports206 ?? true
                     });
                     if (live.q === '720p') break;
                   }
@@ -1763,7 +1766,8 @@ var HDHub4uClient = class {
                   q: live.q,
                   url: live.url,
                   server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
-                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                  supports206: live.item?.supports206 ?? true
                 });
                 break;
               }
@@ -1785,7 +1789,8 @@ var HDHub4uClient = class {
                     q: '1080p',
                     url: hls.url,
                     server: 'Watch Online (High-Speed Stream)',
-                    priority: 4
+                    priority: 4,
+                    supports206: true
                   });
                   break;
                 }
@@ -1808,7 +1813,8 @@ var HDHub4uClient = class {
             headers: defaultHeaders,
             mimeType: ClientUtils.detectMimeType(primaryUrl),
             quality: chosenQuality,
-            server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 1 (HDHub4u)')
+            server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 1 (HDHub4u)'),
+            supports206: bestCandidate.supports206 ?? true
           };
         }
       }
@@ -1875,7 +1881,8 @@ var HDHub4uClient = class {
                     q: live.q,
                     url: live.url,
                     server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
-                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                    supports206: live.item?.supports206 ?? true
                   });
                   if (live.q === '1080p') break;
                 }
@@ -1899,7 +1906,8 @@ var HDHub4uClient = class {
                   q: live.q,
                   url: live.url,
                   server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
-                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                  supports206: live.item?.supports206 ?? true
                 });
                 if (live.q === '4k') break;
               }
@@ -1922,7 +1930,8 @@ var HDHub4uClient = class {
                     q: live.q,
                     url: live.url,
                     server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
-                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                    supports206: live.item?.supports206 ?? true
                   });
                   if (live.q === '720p') break;
                 }
@@ -1945,7 +1954,8 @@ var HDHub4uClient = class {
                 q: live.q,
                 url: live.url,
                 server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
-                priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                supports206: live.item?.supports206 ?? true
               });
               break;
             }
@@ -1967,7 +1977,8 @@ var HDHub4uClient = class {
                   q: '1080p',
                   url: hls.url,
                   server: 'Watch Online (High-Speed Stream)',
-                  priority: 4
+                  priority: 4,
+                  supports206: true
                 });
                 break;
               }
@@ -1988,7 +1999,8 @@ var HDHub4uClient = class {
           headers: defaultHeaders,
           mimeType: ClientUtils.detectMimeType(primaryUrl),
           quality: chosenQuality,
-          server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 1 (HDHub4u)')
+          server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 1 (HDHub4u)'),
+          supports206: bestCandidate.supports206 ?? true
         };
       }
     }
@@ -2209,7 +2221,8 @@ var FourKHDHubClient = class {
                       q: live.q,
                       url: live.url,
                       server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
-                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                      supports206: live.item?.supports206 ?? true
                     });
                     if (live.q === '1080p') break;
                   }
@@ -2232,7 +2245,8 @@ var FourKHDHubClient = class {
                       q: live.q,
                       url: live.url,
                       server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
-                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                      supports206: live.item?.supports206 ?? true
                     });
                     if (live.q === '4k') break;
                   }
@@ -2255,7 +2269,8 @@ var FourKHDHubClient = class {
                       q: live.q,
                       url: live.url,
                       server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
-                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                      supports206: live.item?.supports206 ?? true
                     });
                     if (live.q === '720p') break;
                   }
@@ -2278,7 +2293,8 @@ var FourKHDHubClient = class {
                   q: live.q,
                   url: live.url,
                   server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
-                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                  supports206: live.item?.supports206 ?? true
                 });
                 break;
               }
@@ -2300,7 +2316,8 @@ var FourKHDHubClient = class {
                     q: '1080p',
                     url: hls.url,
                     server: 'Watch Online (High-Speed Stream)',
-                    priority: 4
+                    priority: 4,
+                    supports206: true
                   });
                   break;
                 }
@@ -2323,7 +2340,8 @@ var FourKHDHubClient = class {
             headers: defaultHeaders,
             mimeType: ClientUtils.detectMimeType(primaryUrl),
             quality: chosenQuality,
-            server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 2 (4KHDHub)')
+            server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 2 (4KHDHub)'),
+            supports206: bestCandidate.supports206 ?? true
           };
         }
       }
@@ -2390,7 +2408,8 @@ var FourKHDHubClient = class {
                     q: live.q,
                     url: live.url,
                     server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
-                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                    supports206: live.item?.supports206 ?? true
                   });
                   if (live.q === '1080p') break;
                 }
@@ -2414,7 +2433,8 @@ var FourKHDHubClient = class {
                   q: live.q,
                   url: live.url,
                   server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
-                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                  supports206: live.item?.supports206 ?? true
                 });
                 if (live.q === '4k') break;
               }
@@ -2437,7 +2457,8 @@ var FourKHDHubClient = class {
                     q: live.q,
                     url: live.url,
                     server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
-                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                    supports206: live.item?.supports206 ?? true
                   });
                   if (live.q === '720p') break;
                 }
@@ -2460,7 +2481,8 @@ var FourKHDHubClient = class {
                 q: live.q,
                 url: live.url,
                 server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
-                priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                supports206: live.item?.supports206 ?? true
               });
               break;
             }
@@ -2482,7 +2504,8 @@ var FourKHDHubClient = class {
                   q: '1080p',
                   url: hls.url,
                   server: 'Watch Online (High-Speed Stream)',
-                  priority: 4
+                  priority: 4,
+                  supports206: true
                 });
                 break;
               }
@@ -2503,7 +2526,8 @@ var FourKHDHubClient = class {
           headers: defaultHeaders,
           mimeType: ClientUtils.detectMimeType(primaryUrl),
           quality: chosenQuality,
-          server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 2 (4KHDHub)')
+          server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 2 (4KHDHub)'),
+          supports206: bestCandidate.supports206 ?? true
         };
       }
     }
