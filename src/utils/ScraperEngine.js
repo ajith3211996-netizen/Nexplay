@@ -1493,6 +1493,21 @@ function getHubServerLabel(url, quality, providerName = 'Server 1 (HDHub4u)') {
   return `${providerName} Direct Stream`;
 }
 
+export function formatSizeMB(mb) {
+  if (!mb || isNaN(mb) || mb <= 0) return null;
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${Math.round(mb)} MB`;
+}
+
+export function defaultSizeForQuality(q) {
+  const lower = (q || '').toLowerCase();
+  if (lower.includes('4k') || lower.includes('2160')) return '5.8 GB';
+  if (lower.includes('1080')) return '2.2 GB';
+  if (lower.includes('720')) return '1.1 GB';
+  if (lower.includes('480') || lower.includes('490') || lower.includes('sd')) return '450 MB';
+  return '1.5 GB';
+}
+
 var HDHub4uClient = class {
   constructor() {
     this.baseUrl = "https://new5.hdhub4u.cl";
@@ -1658,6 +1673,7 @@ var HDHub4uClient = class {
     const targetEp = parseInt(episodeNumber || 1, 10);
 
     const qualities = {};
+    const qualitySizes = {};
     const defaultHeaders = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
       "Accept": "*/*"
@@ -1735,6 +1751,7 @@ var HDHub4uClient = class {
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "1080p");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                     liveCandidates.push({
                       q: live.q,
                       url: live.url,
@@ -1759,6 +1776,7 @@ var HDHub4uClient = class {
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                     liveCandidates.push({
                       q: live.q,
                       url: live.url,
@@ -1783,6 +1801,7 @@ var HDHub4uClient = class {
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "720p");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                     liveCandidates.push({
                       q: live.q,
                       url: live.url,
@@ -1807,6 +1826,7 @@ var HDHub4uClient = class {
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "480p");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                     liveCandidates.push({
                       q: live.q,
                       url: live.url,
@@ -1831,6 +1851,7 @@ var HDHub4uClient = class {
               const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, b.quality || "1080p");
               if (live && live.url) {
                 qualities[live.q] = live.url;
+                if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                 liveCandidates.push({
                   q: live.q,
                   url: live.url,
@@ -1868,6 +1889,11 @@ var HDHub4uClient = class {
           }
         }
 
+        // Fallback default sizes for any qualities lacking size
+        for (const [qKey] of Object.entries(qualities)) {
+          if (!qualitySizes[qKey]) qualitySizes[qKey] = defaultSizeForQuality(qKey);
+        }
+
         // Strictly prioritize: FSL (1) -> FSLv2 (2) -> Pixeldrain (3) -> Watch Online (4) -> Workers (5) -> Google CDN 10Gbps (99)
         const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
         if (bestCandidate) {
@@ -1879,6 +1905,7 @@ var HDHub4uClient = class {
             episodeNumber: targetEp,
             streamUrl: primaryUrl,
             qualities,
+            qualitySizes,
             headers: defaultHeaders,
             mimeType: ClientUtils.detectMimeType(primaryUrl),
             quality: chosenQuality,
@@ -1968,6 +1995,7 @@ var HDHub4uClient = class {
                 const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "1080p");
                 if (live && live.url) {
                   qualities[live.q] = live.url;
+                  if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                   liveCandidates.push({
                     q: live.q,
                     url: live.url,
@@ -1993,6 +2021,7 @@ var HDHub4uClient = class {
               const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
               if (live && live.url) {
                 qualities[live.q] = live.url;
+                if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                 liveCandidates.push({
                   q: live.q,
                   url: live.url,
@@ -2017,6 +2046,7 @@ var HDHub4uClient = class {
                 const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "720p");
                 if (live && live.url) {
                   qualities[live.q] = live.url;
+                  if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                   liveCandidates.push({
                     q: live.q,
                     url: live.url,
@@ -2042,6 +2072,7 @@ var HDHub4uClient = class {
                 const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "480p");
                 if (live && live.url) {
                   qualities[live.q] = live.url;
+                  if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                   liveCandidates.push({
                     q: live.q,
                     url: live.url,
@@ -2066,6 +2097,7 @@ var HDHub4uClient = class {
             const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, b.quality || "1080p");
             if (live && live.url) {
               qualities[live.q] = live.url;
+              if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
               liveCandidates.push({
                 q: live.q,
                 url: live.url,
@@ -2103,6 +2135,11 @@ var HDHub4uClient = class {
         }
       }
 
+      // Fallback default sizes for any qualities lacking size
+      for (const [qKey] of Object.entries(qualities)) {
+        if (!qualitySizes[qKey]) qualitySizes[qKey] = defaultSizeForQuality(qKey);
+      }
+
       // Strictly prioritize: FSL (1) -> FSLv2 (2) -> Pixeldrain (3) -> Watch Online (4) -> Workers (5) -> Google CDN 10Gbps (99)
       const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
       if (bestCandidate) {
@@ -2112,6 +2149,7 @@ var HDHub4uClient = class {
           title,
           streamUrl: primaryUrl,
           qualities,
+          qualitySizes,
           headers: defaultHeaders,
           mimeType: ClientUtils.detectMimeType(primaryUrl),
           quality: chosenQuality,
@@ -2274,9 +2312,8 @@ var FourKHDHubClient = class {
 
     const { episodeMap, movieBridges, defaultPageSeason } = parseMediaBridges(html, title);
     const targetSeason = parseInt(seasonNumber || defaultPageSeason || 1, 10);
-    const targetEp = parseInt(episodeNumber || 1, 10);
-
-    const qualities = {};
+    const targetEp = parseInt(episodeNumber     const qualities = {};
+    const qualitySizes = {};
     const defaultHeaders = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
       "Accept": "*/*"
@@ -2315,7 +2352,6 @@ var FourKHDHubClient = class {
           return /\b(720p?|720)\b|\bhd\b(?!\s*hub|\s*stream|\s*r)/i.test(cleanText) ||
                  /\b(720p?|720)\b|\bhd\b(?!\s*hub|\s*stream|\s*r)/i.test(cleanUrl);
         };
-
         const is480p = (b) => {
           if (is4K(b) || is1080p(b) || is720p(b)) return false;
           const q = (b.quality || '').toLowerCase();
@@ -2355,6 +2391,7 @@ var FourKHDHubClient = class {
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "1080p");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                     liveCandidates.push({
                       q: live.q,
                       url: live.url,
@@ -2379,6 +2416,7 @@ var FourKHDHubClient = class {
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                     liveCandidates.push({
                       q: live.q,
                       url: live.url,
@@ -2403,6 +2441,7 @@ var FourKHDHubClient = class {
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "720p");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                     liveCandidates.push({
                       q: live.q,
                       url: live.url,
@@ -2427,6 +2466,7 @@ var FourKHDHubClient = class {
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "480p");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                     liveCandidates.push({
                       q: live.q,
                       url: live.url,
@@ -2451,6 +2491,7 @@ var FourKHDHubClient = class {
               const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, b.quality || "1080p");
               if (live && live.url) {
                 qualities[live.q] = live.url;
+                if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                 liveCandidates.push({
                   q: live.q,
                   url: live.url,
@@ -2488,6 +2529,11 @@ var FourKHDHubClient = class {
           }
         }
 
+        // Fallback default sizes for any qualities lacking size
+        for (const [qKey] of Object.entries(qualities)) {
+          if (!qualitySizes[qKey]) qualitySizes[qKey] = defaultSizeForQuality(qKey);
+        }
+
         // Strictly prioritize: FSL (1) -> FSLv2 (2) -> Pixeldrain (3) -> Watch Online (4) -> Workers (5) -> Google CDN 10Gbps (99)
         const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
         if (bestCandidate) {
@@ -2499,6 +2545,7 @@ var FourKHDHubClient = class {
             episodeNumber: targetEp,
             streamUrl: primaryUrl,
             qualities,
+            qualitySizes,
             headers: defaultHeaders,
             mimeType: ClientUtils.detectMimeType(primaryUrl),
             quality: chosenQuality,
@@ -2588,6 +2635,7 @@ var FourKHDHubClient = class {
                 const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "1080p");
                 if (live && live.url) {
                   qualities[live.q] = live.url;
+                  if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                   liveCandidates.push({
                     q: live.q,
                     url: live.url,
@@ -2613,6 +2661,7 @@ var FourKHDHubClient = class {
               const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
               if (live && live.url) {
                 qualities[live.q] = live.url;
+                if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                 liveCandidates.push({
                   q: live.q,
                   url: live.url,
@@ -2637,6 +2686,7 @@ var FourKHDHubClient = class {
                 const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "720p");
                 if (live && live.url) {
                   qualities[live.q] = live.url;
+                  if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                   liveCandidates.push({
                     q: live.q,
                     url: live.url,
@@ -2662,6 +2712,7 @@ var FourKHDHubClient = class {
                 const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "480p");
                 if (live && live.url) {
                   qualities[live.q] = live.url;
+                  if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
                   liveCandidates.push({
                     q: live.q,
                     url: live.url,
@@ -2686,6 +2737,7 @@ var FourKHDHubClient = class {
             const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, b.quality || "1080p");
             if (live && live.url) {
               qualities[live.q] = live.url;
+              if (b.sizeMB && !qualitySizes[live.q]) qualitySizes[live.q] = formatSizeMB(b.sizeMB);
               liveCandidates.push({
                 q: live.q,
                 url: live.url,
@@ -2723,6 +2775,11 @@ var FourKHDHubClient = class {
         }
       }
 
+      // Fallback default sizes for any qualities lacking size
+      for (const [qKey] of Object.entries(qualities)) {
+        if (!qualitySizes[qKey]) qualitySizes[qKey] = defaultSizeForQuality(qKey);
+      }
+
       // Strictly prioritize: FSL (1) -> FSLv2 (2) -> Pixeldrain (3) -> Watch Online (4) -> Workers (5) -> Google CDN 10Gbps (99)
       const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
       if (bestCandidate) {
@@ -2732,6 +2789,7 @@ var FourKHDHubClient = class {
           title,
           streamUrl: primaryUrl,
           qualities,
+          qualitySizes,
           headers: defaultHeaders,
           mimeType: ClientUtils.detectMimeType(primaryUrl),
           quality: chosenQuality,

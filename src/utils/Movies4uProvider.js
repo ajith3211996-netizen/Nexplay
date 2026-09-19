@@ -320,12 +320,13 @@ export class Movies4uClient {
             bridgeList.push({ label, quality, size, bridgeUrl });
         }
         if (!isSeries) {
-            // For movies, fetch the primary 4K / highest quality download bridge
+            // For movies, fetch candidate download bridges to discover all available qualities
             const sortedBridges = sortBridgesByFidelity(bridgeList);
-            const primaryBridge = sortedBridges[0];
-            if (primaryBridge) {
-                const hubLinks = await this.extractHubCloudFromBridge(primaryBridge.bridgeUrl, primaryBridge.quality, fetcher);
-                streamingLinks.push(...hubLinks);
+            for (const b of sortedBridges.slice(0, 4)) {
+                try {
+                    const hubLinks = await this.extractHubCloudFromBridge(b.bridgeUrl, b.quality, fetcher);
+                    streamingLinks.push(...hubLinks);
+                } catch (_) {}
             }
             return {
                 title: rawTitle,
@@ -335,7 +336,9 @@ export class Movies4uClient {
                 thumbnail,
                 year,
                 quality: this.detectQuality(rawTitle),
-                streamingLinks
+                streamingLinks,
+                qualityBridges: bridgeList,
+                downloadLinks: bridgeList
             };
         }
         // TV Series Handling: Group bridges by Season
@@ -488,9 +491,18 @@ export class Movies4uClient {
         
         if (!isTVShow && details.mediaType === 'movie') {
             const qualities = {};
+            const qualitySizes = {};
             let primaryHeaders = { 'User-Agent': DEFAULT_USER_AGENT };
             let primaryMime = 'video/x-matroska';
             let primaryServer = 'Server 3 (Movies4u)';
+
+            for (const b of (details.qualityBridges || details.downloadLinks || [])) {
+                const qLower = (b.quality || '').toLowerCase();
+                const qKey = qLower.includes('4k') || qLower.includes('2160') ? '4k' : (qLower.includes('1080') ? '1080p' : (qLower.includes('720') ? '720p' : '480p'));
+                if (b.size && !qualitySizes[qKey]) {
+                    qualitySizes[qKey] = b.size.replace(/\/[Ee].*/i, '').trim();
+                }
+            }
 
             const candidates = [
                 ...(details.streamingLinks || []),
@@ -525,6 +537,9 @@ export class Movies4uClient {
                                 if (!qualities[qKey]) {
                                     qualities[qKey] = primary.url;
                                 }
+                                if (!qualitySizes[qKey]) {
+                                    qualitySizes[qKey] = qKey === '4k' ? '4.5 GB' : (qKey === '1080p' ? '2.1 GB' : (qKey === '720p' ? '950 MB' : '450 MB'));
+                                }
                                 liveCandidates.push({
                                     quality: qKey === '4k' ? '4K' : (qKey === '1080p' ? '1080p' : (qKey === '720p' ? '720p' : '480p')),
                                     url: primary.url,
@@ -551,6 +566,7 @@ export class Movies4uClient {
                     mediaType: 'movie',
                     streamUrl: primaryUrl,
                     qualities,
+                    qualitySizes,
                     headers: bestCandidate.headers || primaryHeaders,
                     mimeType: isHls ? 'application/vnd.apple.mpegurl' : (bestCandidate.mimeType || primaryMime),
                     quality: bestCandidate.quality || '1080p',
@@ -566,6 +582,16 @@ export class Movies4uClient {
             const season = details.seasons?.find(s => s.seasonNumber === seasonNumber) || details.seasons?.[0];
             const sortedBridges = season && season.qualityBridges.length > 0 ? sortBridgesByFidelity(season.qualityBridges) : [];
             const qualities = {};
+            const qualitySizes = {};
+            if (season && season.qualityBridges) {
+                for (const b of season.qualityBridges) {
+                    const qLower = (b.quality || '').toLowerCase();
+                    const qKey = qLower.includes('4k') || qLower.includes('2160') ? '4k' : (qLower.includes('1080') ? '1080p' : (qLower.includes('720') ? '720p' : '480p'));
+                    if (b.size && !qualitySizes[qKey]) {
+                        qualitySizes[qKey] = b.size.replace(/\/[Ee].*/i, '').trim();
+                    }
+                }
+            }
             const liveCandidates = [];
 
             // Iterate across candidate bridges in fidelity order (1080p / 4K / 720p)
@@ -587,6 +613,9 @@ export class Movies4uClient {
                                                 : (qLower.includes('1080') ? '1080p' : (qLower.includes('720') ? '720p' : (qLower.includes('480') || qLower.includes('490') || qLower.includes('sd') ? '480p' : '1080p')));
                                             if (!qualities[qKey]) {
                                                 qualities[qKey] = candidateStream.url;
+                                            }
+                                            if (!qualitySizes[qKey]) {
+                                                qualitySizes[qKey] = qKey === '4k' ? '1.8 GB' : (qKey === '1080p' ? '950 MB' : (qKey === '720p' ? '500 MB' : '280 MB'));
                                             }
                                             liveCandidates.push({
                                                 quality: qKey === '4k' ? '4K' : (qKey === '1080p' ? '1080p' : (qKey === '720p' ? '720p' : '480p')),
@@ -619,6 +648,7 @@ export class Movies4uClient {
                     episodeNumber: ep.episodeNumber,
                     streamUrl: bestCandidate.url,
                     qualities,
+                    qualitySizes,
                     headers: bestCandidate.headers || { 'User-Agent': DEFAULT_USER_AGENT },
                     mimeType: bestCandidate.mimeType || 'video/x-matroska',
                     quality: bestCandidate.quality || '1080p',

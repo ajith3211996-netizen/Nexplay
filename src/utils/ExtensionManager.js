@@ -442,6 +442,7 @@ class ExtensionManagerService {
             title: match.title,
             streamUrl: playable.streamUrl,
             qualities: playable.qualities || {},
+            qualitySizes: playable.qualitySizes || {},
             headers: playable.headers || {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
             },
@@ -449,6 +450,7 @@ class ExtensionManagerService {
             quality: playable.quality || '1080p',
             server: playable.server || serverLabel,
             supports206: supports206,
+            thumbnail: match.image || playable.thumbnail,
             subtitles: playable.subtitles || []
           };
 
