@@ -8,6 +8,7 @@ import {
   cleanTitleKeywords, 
   normalizeString 
 } from './ScraperEngine.js';
+import { ProviderUpdateManager } from './ProviderUpdateManager.js';
 
 /**
  * ExtensionManager
@@ -17,11 +18,13 @@ import {
  * - HDHub4u (Server 1): Dedicated to Indian Regional Movies & Multi-Audio Releases
  * - 4KHDHub (Server 2): Dedicated to Hollywood, 4K HDR, Series, KDramas
  * - Extracts direct 10Gbps Cloudflare R2 / Fast CDN streams for Media3 ExoPlayer
+ * - Dynamic OTA Over-The-Air GitHub update syncing on app open
  */
 class ExtensionManagerService {
   constructor() {
     this.webViewRef = null;
     this.isReady = true;
+    this.updateManager = ProviderUpdateManager;
     console.log("[ExtensionManager] Native High-Speed Scraper Engine initialized.");
   }
 
@@ -63,10 +66,9 @@ class ExtensionManagerService {
   }
 
   /**
-   * Smart Media Matcher:
-   * Finds the authentic matching movie or TV show across providers with confidence threshold.
+   * Search provider and gather all candidate matches across query strategies
    */
-  async findBestMatchingMedia({ provider = 'hdhub4u', targetTitle, targetYear, isTVShow, seasonNumber = 1, originalLanguage, isIndianRegion }) {
+  async findCandidatesMedia({ provider = 'hdhub4u', targetTitle, targetYear, isTVShow, seasonNumber = 1, originalLanguage, isIndianRegion }) {
     const cleanTitle = (targetTitle || '')
       .replace(/[:\-–—]/g, ' ')
       .replace(/\s+/g, ' ')
@@ -108,13 +110,14 @@ class ExtensionManagerService {
     if (isTVShow) {
       candidateQueries.push(`${cleanTitle} (Season ${seasonNumber})`);
       candidateQueries.push(`${cleanTitle} Season ${seasonNumber}`);
+      candidateQueries.push(`${cleanTitle} (S0${seasonNumber})`);
+      candidateQueries.push(`${cleanTitle} (S${seasonNumber})`);
+      candidateQueries.push(`${cleanTitle} S0${seasonNumber}`);
+      candidateQueries.push(`${cleanTitle} S${seasonNumber}`);
       if (digitTitle !== cleanTitle) {
         candidateQueries.push(`${digitTitle} (Season ${seasonNumber})`);
         candidateQueries.push(`${digitTitle} Season ${seasonNumber}`);
       }
-      candidateQueries.push(`${cleanTitle} (S0${seasonNumber})`);
-      candidateQueries.push(`${cleanTitle} (S${seasonNumber})`);
-      candidateQueries.push(`${cleanTitle} S${seasonNumber}`);
       candidateQueries.push(cleanTitle);
       if (digitTitle !== cleanTitle) candidateQueries.push(digitTitle);
     } else {
@@ -131,23 +134,59 @@ class ExtensionManagerService {
     }
 
     const uniqueQueries = Array.from(new Set(candidateQueries));
+    const allMatches = [];
+    const seenUrls = new Set();
 
     for (const query of uniqueQueries) {
       try {
-        console.log(`[ExtensionManager] Searching on ${activeProvider} with query: "${query}"`);
         const results = await this.getSearchPosts(activeProvider, query);
-        const match = findBestMatch(cleanTitle, targetYear, targetType, results, 0.55, targetSeason);
-
-        if (match) {
-          console.log(`[ExtensionManager] ✅ Found verified match on ${activeProvider} (Score: ${(match.matchScore * 100).toFixed(1)}%): "${match.title}"`);
-          return { match, provider: activeProvider };
+        for (const c of results) {
+          const postLink = c.link || c.url;
+          if (postLink && !seenUrls.has(postLink)) {
+            seenUrls.add(postLink);
+            const score = calculateTitleMatchScore(
+              cleanTitle,
+              targetYear,
+              targetType,
+              c.title,
+              c.year,
+              c.type || c.mediaType || (postLink.includes('-series-') ? 'series' : 'movie'),
+              targetSeason,
+              postLink
+            );
+            if (score >= 0.55) {
+              allMatches.push({
+                match: { ...c, matchScore: score, link: postLink },
+                matchScore: score,
+                provider: activeProvider
+              });
+            }
+          }
+        }
+        if (allMatches.some(m => m.matchScore >= 2.0)) {
+          break;
         }
       } catch (e) {
         console.warn(`[ExtensionManager] Error searching ${activeProvider} for "${query}":`, e?.message || e);
       }
     }
 
-    console.warn(`[ExtensionManager] ⚠️ No verified stream match found for "${cleanTitle}" on ${activeProvider}.`);
+    allMatches.sort((a, b) => b.matchScore - a.matchScore);
+    return allMatches;
+  }
+
+  /**
+   * Smart Media Matcher:
+   * Finds the authentic matching movie or TV show across providers with confidence threshold.
+   */
+  async findBestMatchingMedia(params) {
+    const candidates = await this.findCandidatesMedia(params);
+    if (candidates.length > 0) {
+      const best = candidates[0];
+      console.log(`[ExtensionManager] ✅ Found verified match on ${best.provider} (Score: ${(best.matchScore * 100).toFixed(1)}%): "${best.match.title}"`);
+      return best;
+    }
+    console.warn(`[ExtensionManager] ⚠️ No verified stream match found for "${params.targetTitle}" on ${params.provider || 'hdhub4u'}.`);
     return null;
   }
 
@@ -297,7 +336,32 @@ class ExtensionManagerService {
     episodeNumber = 1,
     originalLanguage = 'en',
     isIndianRegion = false,
-    provider = 'hdhub4u'
+    provider = 'hdhub4u',
+    allowCrossProviderFallback = true
+  }) {
+    return this.findAndResolvePlayableStreamInternal({
+      targetTitle,
+      targetYear,
+      isTVShow,
+      seasonNumber,
+      episodeNumber,
+      originalLanguage,
+      isIndianRegion,
+      provider,
+      allowCrossProviderFallback
+    });
+  }
+
+  async findAndResolvePlayableStreamInternal({
+    targetTitle,
+    targetYear,
+    isTVShow = false,
+    seasonNumber = 1,
+    episodeNumber = 1,
+    originalLanguage = 'en',
+    isIndianRegion = false,
+    provider = 'hdhub4u',
+    allowCrossProviderFallback = true
   }) {
     const cleanTitle = (targetTitle || '')
       .replace(/[:\-–—]/g, ' ')
@@ -308,10 +372,9 @@ class ExtensionManagerService {
     const targetSeason = isTVShow ? parseInt(seasonNumber, 10) : 1;
     const activeProvider = provider || 'hdhub4u';
 
-    console.log(`[ExtensionManager] Strict Single-Provider Resolve on "${activeProvider}" for "${cleanTitle}" (Type: ${isTVShow ? `TV S${targetSeason}E${targetEp}` : 'Movie'})`);
+    console.log(`[ExtensionManager] Resolve on "${activeProvider}" for "${cleanTitle}" (Type: ${isTVShow ? `TV S${targetSeason}E${targetEp}` : 'Movie'})`);
 
-    // 1. Find best matching media post strictly on this provider
-    const matchedData = await this.findBestMatchingMedia({
+    const candidates = await this.findCandidatesMedia({
       provider: activeProvider,
       targetTitle: cleanTitle,
       targetYear,
@@ -321,40 +384,110 @@ class ExtensionManagerService {
       isIndianRegion
     });
 
-    if (!matchedData || !matchedData.match) {
+    if (!candidates || candidates.length === 0) {
+      if (allowCrossProviderFallback) {
+        const otherProviders = ['hdhub4u', '4khdhub', 'movies4u'].filter(p => p !== activeProvider);
+        for (const alt of otherProviders) {
+          try {
+            console.log(`[ExtensionManager] Provider ${activeProvider} had no candidates, trying alternative provider: ${alt}`);
+            const res = await this.findAndResolvePlayableStreamInternal({
+              targetTitle: cleanTitle,
+              targetYear,
+              isTVShow,
+              seasonNumber: targetSeason,
+              episodeNumber: targetEp,
+              originalLanguage,
+              isIndianRegion,
+              provider: alt,
+              allowCrossProviderFallback: false
+            });
+            if (res) return res;
+          } catch (_) {}
+        }
+      }
       throw new Error(`No matching media post found for "${cleanTitle}" on ${activeProvider}.`);
     }
 
-    const { match, provider: matchedProvider } = matchedData;
-    console.log(`[ExtensionManager] Found candidate post on ${matchedProvider}: "${match.title}" -> ${match.link}`);
+    let googleCdnFallback = null;
 
-    // 2. Extract playable stream strictly from this provider
-    const playable = await this.getPlayableStream(
-      matchedProvider,
-      match.link,
-      isTVShow,
-      targetEp,
-      targetSeason
-    );
+    // Iterate through top candidate matching posts until a live playable stream is resolved
+    for (const c of candidates.slice(0, 5)) {
+      const match = c.match;
+      const matchedProvider = c.provider || activeProvider;
+      try {
+        console.log(`[ExtensionManager] Trying post on ${matchedProvider} (Score: ${(c.matchScore * 100).toFixed(1)}%): "${match.title}" -> ${match.link}`);
+        const playable = await this.getPlayableStream(
+          matchedProvider,
+          match.link,
+          isTVShow,
+          targetEp,
+          targetSeason
+        );
 
-    if (playable && playable.streamUrl) {
-      console.log(`[ExtensionManager] ✅ Successfully resolved playable stream from ${matchedProvider} (${playable.quality || '1080p'})!`);
-      const serverLabel = matchedProvider === 'movies4u' ? 'Server 3 (Movies4u)' : (matchedProvider === '4khdhub' ? 'Server 2 (4KHDHub)' : 'Server 1 (HDHub4u)');
-      return {
-        title: match.title,
-        streamUrl: playable.streamUrl,
-        qualities: playable.qualities || {},
-        headers: playable.headers || {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-        },
-        mimeType: playable.mimeType || 'video/x-matroska',
-        quality: playable.quality || '1080p',
-        server: serverLabel,
-        subtitles: playable.subtitles || []
-      };
+        if (playable && playable.streamUrl) {
+          const isGoogleCdn = (playable.streamUrl || '').includes('googleusercontent.com') || (playable.streamUrl || '').includes('video-downloads');
+          const serverLabel = matchedProvider === 'movies4u' ? 'Server 3 (Movies4u)' : (matchedProvider === '4khdhub' ? 'Server 2 (4KHDHub)' : 'Server 1 (HDHub4u)');
+          const candidateResult = {
+            title: match.title,
+            streamUrl: playable.streamUrl,
+            qualities: playable.qualities || {},
+            headers: playable.headers || {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            },
+            mimeType: playable.mimeType || 'video/x-matroska',
+            quality: playable.quality || '1080p',
+            server: playable.server || serverLabel,
+            subtitles: playable.subtitles || []
+          };
+
+          // If this is Google CDN (does NOT support HTTP 206 Partial Content), hold it as fallback
+          if (isGoogleCdn) {
+            if (!googleCdnFallback) {
+              googleCdnFallback = candidateResult;
+            }
+            continue;
+          }
+
+          console.log(`[ExtensionManager] ✅ Successfully resolved playable stream from ${matchedProvider} (${playable.quality || '1080p'}) [${candidateResult.server}]!`);
+          return candidateResult;
+        }
+      } catch (err) {
+        console.warn(`[ExtensionManager] Candidate post resolution error on ${matchedProvider}:`, err?.message || err);
+      }
     }
 
-    throw new Error(`Could not resolve direct stream for "${cleanTitle}" on ${matchedProvider}.`);
+    // If only Google CDN was found on this provider, check other providers for FSL / FSLv2 / Pixeldrain / Watch Online first!
+    if (allowCrossProviderFallback) {
+      const otherProviders = ['hdhub4u', '4khdhub', 'movies4u'].filter(p => p !== activeProvider);
+      for (const alt of otherProviders) {
+        try {
+          console.log(`[ExtensionManager] Checking alternative provider ${alt} for non-Google CDN stream...`);
+          const altResult = await this.findAndResolvePlayableStreamInternal({
+            targetTitle: cleanTitle,
+            targetYear,
+            isTVShow,
+            seasonNumber: targetSeason,
+            episodeNumber: targetEp,
+            originalLanguage,
+            isIndianRegion,
+            provider: alt,
+            allowCrossProviderFallback: false
+          });
+          if (altResult && !altResult.streamUrl.includes('googleusercontent.com') && !altResult.streamUrl.includes('video-downloads')) {
+            console.log(`[ExtensionManager] ✅ Alternative provider ${alt} resolved range-supporting stream: [${altResult.server}]!`);
+            return altResult;
+          }
+        } catch (_) {}
+      }
+    }
+
+    // Only if all providers lack FSL / FSLv2 / Pixeldrain / Watch Online, return Google CDN as absolute last resort
+    if (googleCdnFallback) {
+      console.log(`[ExtensionManager] ⚠️ Across providers, only Google CDN is available. Returning as last resort: [${googleCdnFallback.server}]`);
+      return googleCdnFallback;
+    }
+
+    throw new Error(`Could not resolve direct stream for "${cleanTitle}" on ${activeProvider}.`);
   }
 
   /**
@@ -388,6 +521,34 @@ class ExtensionManagerService {
       provider
     });
   }
+
+  /**
+   * Initialize Dynamic OTA updates from GitHub on App Launch
+   */
+  async initRemoteUpdates(options) {
+    return ProviderUpdateManager.init(options);
+  }
+
+  /**
+   * Check for remote updates from GitHub repository
+   */
+  async checkForUpdates(force = false) {
+    return ProviderUpdateManager.checkForUpdates({ force });
+  }
+
+  /**
+   * Get current OTA update status
+   */
+  getUpdateStatus() {
+    return ProviderUpdateManager.getStatus();
+  }
+
+  /**
+   * Subscribe to OTA update events
+   */
+  onUpdate(listener) {
+    return ProviderUpdateManager.addListener(listener);
+  }
 }
 
 export const ExtensionManager = new ExtensionManagerService();
@@ -399,7 +560,8 @@ export {
   calculateTitleMatchScore,
   findBestMatch,
   cleanTitleKeywords,
-  normalizeString
+  normalizeString,
+  ProviderUpdateManager
 };
 
 export const getSandboxHtml = () => '<!DOCTYPE html><html><body><h3>Scraper Engine Ready</h3></body></html>';

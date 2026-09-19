@@ -204,17 +204,24 @@ function calculateTitleMatchScore(
   }
 
   // 6. Subtitle expansion bonus (e.g. "Stree 2: Sarkate Ka Aatank", "Spider-Man: No Way Home")
-  if (targetRecall === 1.0 && yearMultiplier >= 1.0) {
+  // Only grant subtitle expansion if candidate starts with the target title tokens
+  const isTargetPrefix = cleanCandidate.startsWith(cleanTarget) || 
+    (filteredCandidateTokens.length >= targetTokens.length && targetTokens.every((t, i) => t === filteredCandidateTokens[i]));
+
+  if (targetRecall === 1.0 && isTargetPrefix && yearMultiplier >= 1.0) {
     return Math.min(1.7, (1.2 + candidatePrecision * 0.4) * typeMultiplier * seasonMultiplier);
   }
 
-  // Severe penalty for single-word targets (like "From") when candidate has extra non-meta words ("The Girl From Plainville")
+  // Severe penalty for single-word targets (like "From") when candidate has extra non-meta words ("The Girl From Plainville", "Agent from Above")
   let precisionWeight = 0.3;
   if (targetTokens.length === 1 && filteredCandidateTokens.length > 1) {
-    precisionWeight = 0.8;
+    precisionWeight = 0.85;
   }
 
-  const baseScore = (targetRecall * (1 - precisionWeight)) + (candidatePrecision * precisionWeight);
+  let baseScore = (targetRecall * (1 - precisionWeight)) + (candidatePrecision * precisionWeight);
+  if (!isTargetPrefix && targetTokens.length <= 2) {
+    baseScore *= 0.4; // Strong penalty if target word appears in the middle of an unrelated title
+  }
   // Cap partial matches at 0.95 so exact/core matches (>1.0) always take priority
   return Math.min(0.95, baseScore * yearMultiplier * typeMultiplier * seasonMultiplier);
 }
@@ -311,7 +318,9 @@ var ClientUtils = class {
     if (!url || typeof url !== 'string') return "";
     for (let attempt = 0; attempt < 2; attempt++) {
       const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-      const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+      const timeoutId = controller ? setTimeout(() => {
+        try { controller.abort(); } catch (_) {}
+      }, timeoutMs) : null;
       try {
         const headers = {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -327,6 +336,11 @@ var ClientUtils = class {
           redirect: "follow"
         });
         if (res && res.ok) {
+          const contentType = (res.headers.get("content-type") || "").toLowerCase();
+          if (contentType.includes("video") || contentType.includes("octet-stream") || contentType.includes("audio")) {
+            try { if (controller) controller.abort(); } catch (_) {}
+            return "";
+          }
           return await res.text();
         }
       } catch (e) {
@@ -346,6 +360,10 @@ var ClientUtils = class {
               redirect: "follow"
             });
             if (retryRes && retryRes.ok) {
+              const contentType = (retryRes.headers.get("content-type") || "").toLowerCase();
+              if (contentType.includes("video") || contentType.includes("octet-stream") || contentType.includes("audio")) {
+                return "";
+              }
               return await retryRes.text();
             }
           }
@@ -354,6 +372,7 @@ var ClientUtils = class {
         if (attempt === 1) return "";
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
+        try { if (controller) controller.abort(); } catch (_) {}
       }
     }
     return "";
@@ -376,7 +395,18 @@ var ClientUtils = class {
       return false;
     }
 
-    // Intermediate web pages that are NOT video streams
+    // Intermediate web pages & wrapper landing scripts that MUST be unwrapped
+    if (
+      lower.includes("dl.php?link=") ||
+      lower.includes("link.php?link=") ||
+      lower.includes("fastdl-one.pages.dev/?url=") ||
+      lower.includes("load.php") ||
+      lower.includes("how-to") ||
+      lower.includes("snvhost")
+    ) {
+      return false;
+    }
+
     const intermediateDomains = [
       "hubcloud.",
       "gamerxyt.com",
@@ -389,9 +419,7 @@ var ClientUtils = class {
       "google.com/search",
       "google.com/url",
       "t.me",
-      "tinyurl.com",
-      "load.php",
-      "how-to"
+      "tinyurl.com"
     ];
     if (intermediateDomains.some((d) => lower.includes(d))) {
       return false;
@@ -399,24 +427,50 @@ var ClientUtils = class {
 
     // Direct high-speed CDN streaming endpoints
     if (
-      lower.includes("googleusercontent.com") ||
-      lower.includes("video-downloads") ||
-      url.includes("/ADGP") ||
+      (lower.includes("googleusercontent.com") || lower.includes("video-downloads") || url.includes("/ADGP")) &&
+      !lower.includes("dl.php") && !lower.includes("?url=")
+    ) {
+      return true;
+    }
+
+    if (
       lower.includes("r2.cloudflarestorage.com") || 
-      lower.includes("workers.dev") ||
+      (lower.includes("workers.dev") && !lower.includes("/?id=")) ||
       lower.includes("bunker.monster") || 
       lower.includes("valentine.guru") || 
       lower.includes("pongala.life") || 
       lower.includes("lenin.buzz") || 
-      lower.includes("pixeldrain.com/api/file") || 
-      lower.includes("pixeldrain.dev/api/file") || 
-      lower.includes("fastdl")
+      (lower.includes("pixeldrain.com/api/file") && !lower.includes("negn6f")) || 
+      (lower.includes("pixeldrain.dev/api/file") && !lower.includes("negn6f")) || 
+      (lower.includes("fastdl") && !lower.includes(".pages.dev"))
     ) {
       return true;
     }
 
     const mediaExtensions = [".mp4", ".mkv", ".m3u8", ".mpd", ".webm", ".avi"];
     return mediaExtensions.some((ext) => lower.includes(ext));
+  }
+
+  static extractDirectCdnUrl(url) {
+    if (!url || typeof url !== 'string') return null;
+    const clean = url.trim();
+    if (clean.includes("video-downloads.googleusercontent.com") && !clean.includes("dl.php") && !clean.includes("?url=") && !clean.includes("?link=")) {
+      return clean;
+    }
+    try {
+      const u = new URL(clean);
+      const linkParam = u.searchParams.get('link') || u.searchParams.get('url') || u.searchParams.get('file');
+      if (linkParam && linkParam.startsWith('http')) {
+        return this.extractDirectCdnUrl(linkParam);
+      }
+    } catch (e) {
+      const m = clean.match(/(?:[?&](?:link|url|file)=)(https?%3A%2F%2F[^\s"'<>]+|https?:\/\/[^\s"'<>]+)/i);
+      if (m && m[1]) {
+        const decoded = decodeURIComponent(m[1]);
+        if (decoded.startsWith('http')) return this.extractDirectCdnUrl(decoded);
+      }
+    }
+    return clean;
   }
 
   static detectQualityFromUrl(url, fallbackHint = "1080p") {
@@ -512,6 +566,59 @@ var ClientUtils = class {
     return trimmed.replace(/\s+/g, '%20');
   }
 
+  static getStreamPriority(url, serverLabel = '') {
+    const u = (url || '').toLowerCase();
+    const s = (serverLabel || '').toLowerCase();
+    // 1. [Download FSL server] (Cloudflare R2 Direct)
+    if (u.includes('r2.cloudflarestorage.com') || u.includes('r2.dev') || s.includes('fsl server') || s.includes('fsl 4k') || s.includes('fsl 1080p') || s.includes('fsl direct')) {
+      return 1;
+    }
+    // 2. [Download FSL v2 server] (FastDL / Bunker / Valentine / Lenin CDN / Pongala)
+    if (u.includes('fastdl') || u.includes('bunker.monster') || u.includes('valentine.guru') || u.includes('pongala.life') || u.includes('lenin.buzz') || s.includes('fslv2') || s.includes('fsl v2') || s.includes('fastdl')) {
+      return 2;
+    }
+    // 3. pixeldrain (PixelDrain Direct CDN Stream)
+    if (u.includes('pixeldrain.dev/api/file') || u.includes('pixeldrain.com/api/file') || s.includes('pixel') || s.includes('pixeldrain')) {
+      return 3;
+    }
+    // 4. Watch online (Direct player / HLS stream)
+    if (u.includes('.m3u8') || s.includes('watch online') || s.includes('hdstream4u') || s.includes('hubstream') || s.includes('m4uplay')) {
+      return 4;
+    }
+    // 5. Cloudflare Workers / HubCDN Direct
+    if (u.includes('workers.dev') || u.includes('hubcdn') || s.includes('worker')) {
+      return 5;
+    }
+    // 99. [Download server : 10gbps] Google CDN (Strict last resort - no HTTP 206 range support)
+    if (u.includes('googleusercontent.com') || u.includes('video-downloads') || s.includes('10gbps') || s.includes('google cdn')) {
+      return 99;
+    }
+    return 50;
+  }
+
+  static getQualityWeight(qStr) {
+    const q = (qStr || '').toLowerCase();
+    if (q === '4k' || q === '2160p' || q === 'uhd') return 40;
+    if (q === '1080p' || q === 'fhd') return 30;
+    if (q === '720p' || q === 'hd') return 20;
+    if (q === '480p' || q === 'sd') return 10;
+    return 25;
+  }
+
+  static selectBestStreamCandidate(candidateStreams) {
+    if (!Array.isArray(candidateStreams) || candidateStreams.length === 0) return null;
+    const sorted = [...candidateStreams].sort((a, b) => {
+      const prioA = a.priority ?? this.getStreamPriority(a.url, a.server);
+      const prioB = b.priority ?? this.getStreamPriority(b.url, b.server);
+      if (prioA !== prioB) {
+        return prioA - prioB; // 1 (FSL) < 2 (FSLv2) < 3 (Pixeldrain) < 4 (Watch online) < 5 < 99 (Google CDN)
+      }
+      // If priorities are tied, prioritize higher quality (4K > 1080p > 720p)
+      return this.getQualityWeight(b.quality || b.q) - this.getQualityWeight(a.quality || a.q);
+    });
+    return sorted[0];
+  }
+
   /**
    * Pre-flight video stream health check (verifies HTTP 200/206 streaming availability)
    */
@@ -523,7 +630,9 @@ var ClientUtils = class {
       const safeUrl = this.sanitizeStreamUrl(streamUrl);
       if (typeof AbortController !== "undefined") {
         controller = new AbortController();
-        timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        timeoutId = setTimeout(() => {
+          try { controller.abort(); } catch (_) {}
+        }, timeoutMs);
       }
       
       const reqHeaders = {
@@ -544,7 +653,7 @@ var ClientUtils = class {
       if (contentType.includes("zip") || contentType.includes("html") || contentType.includes("json")) {
         return false;
       }
-      if (safeUrl.includes("testzip.php")) {
+      if (safeUrl.includes("testzip.php") || safeUrl.includes("negn6f")) {
         return false;
       }
       // HTTP 200 (OK), 206 (Partial Content), 302/301 are active stream responses
@@ -554,22 +663,46 @@ var ClientUtils = class {
       return false;
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
+      try { if (controller) controller.abort(); } catch (_) {}
     }
   }
 
   static async selectFirstLiveStream(candidateList, headers = {}, fallbackQuality = "1080p") {
     if (!Array.isArray(candidateList) || candidateList.length === 0) return null;
-    for (const item of candidateList) {
-      if (item && item.url) {
-        const isLive = await this.verifyMediaStream(item.url, headers, 3000);
+    const sorted = [...candidateList].sort((a, b) => (a.priority || 50) - (b.priority || 50));
+    
+    // Pass 1: Try live non-Google CDN streams (FSL, FSLv2, Pixeldrain, Watch Online - priority < 90)
+    for (const item of sorted) {
+      if (item && item.url && (item.priority || 50) < 90) {
+        const streamHeaders = item.headers || headers;
+        const isLive = await this.verifyMediaStream(item.url, streamHeaders, 3500);
         if (isLive) {
           const detectedQ = this.detectQualityFromUrl(item.url, fallbackQuality);
           return { q: detectedQ, url: item.url, item };
         }
       }
     }
-    // Fallback: Return highest-priority valid candidate (avoid known 403 endpoints)
-    const validCandidates = candidateList.filter(c => c && c.url && !c.url.includes('googleusercontent.com'));
+
+    // Fallback: If non-Google CDN candidate exists, return it before Google CDN
+    const nonGoogleValid = sorted.filter(c => c && c.url && (c.priority || 50) < 90 && !c.url.includes('negn6f') && !c.url.includes('testzip.php'));
+    if (nonGoogleValid.length > 0) {
+      const chosen = nonGoogleValid[0];
+      return { q: this.detectQualityFromUrl(chosen.url, fallbackQuality), url: chosen.url, item: chosen };
+    }
+
+    // Pass 2: Only test and return Google CDN (priority >= 90) if no other stream exists across providers
+    for (const item of sorted) {
+      if (item && item.url) {
+        const streamHeaders = item.headers || headers;
+        const isLive = await this.verifyMediaStream(item.url, streamHeaders, 3500);
+        if (isLive) {
+          const detectedQ = this.detectQualityFromUrl(item.url, fallbackQuality);
+          return { q: detectedQ, url: item.url, item };
+        }
+      }
+    }
+
+    const validCandidates = candidateList.filter(c => c && c.url && !c.url.includes('negn6f') && !c.url.includes('testzip.php'));
     const chosen = validCandidates[0] || candidateList[0];
     if (chosen && chosen.url) {
       return { q: this.detectQualityFromUrl(chosen.url, fallbackQuality), url: chosen.url, item: chosen };
@@ -613,16 +746,23 @@ var ClientUtils = class {
 
   static getPixelDrainUrl(html) {
     if (!html) return '';
+    const pxlMatch = html.match(/var\s+pxl\s*=\s*['"]([^'"]+)['"];?/i);
+    if (pxlMatch && pxlMatch[1]) {
+      const cleanVal = pxlMatch[1].replace(/[?&]download.*$/i, '').trim();
+      const token = cleanVal.split('/u/')[1]?.split('?')[0]?.replace(/\/+$/, '') || cleanVal.split('/').pop()?.split('?')[0];
+      if (token && token !== 'negn6f' && token.length >= 6) {
+        return `https://pixeldrain.dev/api/file/${token}`;
+      }
+    }
     const ogMatch = html.match(/<meta\s+[^>]*property=["']og:video(?::secure_url)?["'][^>]*content=["']([^"']+)["']/i) ||
                     html.match(/<meta\s+[^>]*content=["']([^"']+)["'][^>]*property=["']og:video(?::secure_url)?["']/i) ||
-                    html.match(/https?:\/\/pixeldrain\.(?:dev|com)\/api\/file\/([a-zA-Z0-9_-]+)/i);
+                    html.match(/https?:\/\/pixeldrain\.(?:dev|com)\/(?:api\/file|u)\/([a-zA-Z0-9_-]+)/i);
     if (ogMatch) {
-      const rawUrl = ogMatch[1] ? (ogMatch[1].startsWith('http') ? ogMatch[1] : `https://pixeldrain.dev/api/file/${ogMatch[1]}`) : ogMatch[0];
-      return rawUrl.replace(/[?&]download.*$/i, '');
-    }
-    const match = html.match(/var\s+pxl\s*=\s*['"]([^'"]+)['"];?/i);
-    if (match?.[1]) {
-      return match[1].replace(/[?&]download.*$/i, '');
+      const rawUrl = ogMatch[1] || ogMatch[0];
+      const token = rawUrl.split('/u/')[1]?.split('?')[0]?.replace(/\/+$/, '') || rawUrl.split('/api/file/')[1]?.split('?')[0] || rawUrl.split('/').pop()?.split('?')[0];
+      if (token && token !== 'negn6f' && token.length >= 6) {
+        return `https://pixeldrain.dev/api/file/${token}`;
+      }
     }
     return '';
   }
@@ -638,6 +778,10 @@ var ClientUtils = class {
 
   static async getRedirectLocation(url, referer = "") {
     if (!url || typeof url !== 'string') return null;
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => {
+      try { controller.abort(); } catch (_) {}
+    }, 5000) : null;
     try {
       const headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -647,6 +791,7 @@ var ClientUtils = class {
       const res = await fetch(url, {
         method: "GET",
         headers,
+        signal: controller ? controller.signal : void 0,
         redirect: "manual"
       });
       const loc = res.headers.get("location");
@@ -657,67 +802,41 @@ var ClientUtils = class {
         }
         return loc;
       }
-    } catch (e) {}
+    } catch (e) {} finally {
+      if (timeoutId) clearTimeout(timeoutId);
+      try { if (controller) controller.abort(); } catch (_) {}
+    }
     return null;
   }
 
   static async resolveGpdlLink(gpdlUrl, referer = "https://gamerxyt.com/") {
     if (!gpdlUrl || typeof gpdlUrl !== 'string') return null;
     try {
-      // Direct check if URL is already a direct Google CDN stream
-      if (gpdlUrl.includes("video-downloads.googleusercontent.com") || gpdlUrl.includes("googleusercontent.com")) {
-        const decoded = decodeURIComponent(gpdlUrl);
-        const match = decoded.match(/https?:\/\/[^\s"'>]*googleusercontent\.com\/[^\s"'>]+/i);
-        if (match && match[0]) return match[0];
-        return gpdlUrl;
+      const direct = this.extractDirectCdnUrl(gpdlUrl);
+      if (direct && this.isDirectMediaStream(direct)) return direct;
+
+      // Follow redirects to unwrap landing pages
+      let current = gpdlUrl;
+      for (let i = 0; i < 3; i++) {
+        const loc = await this.getRedirectLocation(current, referer);
+        if (!loc) break;
+        const unwrapLoc = this.extractDirectCdnUrl(loc);
+        if (unwrapLoc && this.isDirectMediaStream(unwrapLoc)) return unwrapLoc;
+        current = loc;
       }
 
-      // If URL already contains query parameters with the stream URL
-      if (gpdlUrl.includes('link=') || gpdlUrl.includes('url=') || gpdlUrl.includes('file=')) {
-        const match = gpdlUrl.match(/(?:link|url|file)=([^"'>\s&]+)/i);
-        if (match && match[1]) {
-          const decoded = decodeURIComponent(match[1]);
-          if (this.isDirectMediaStream(decoded)) return decoded;
-        }
+      // Fetch HTML body to extract dl.php?link= or Google CDN URLs
+      const html = await this.httpGet(current, referer);
+      const googleMatch = html.match(/https?:\/\/[^\s"'<>]*video-downloads\.googleusercontent\.com\/[^\s"'<>]*/i) ||
+                          html.match(/https?:\/\/[^\s"'<>]*googleusercontent\.com\/[^\s"'<>]*/i);
+      if (googleMatch && this.isDirectMediaStream(googleMatch[0])) {
+        return googleMatch[0];
       }
-
-      // Step 1: Follow initial redirect from gpdl.hubcloud.cx
-      const loc1 = await this.getRedirectLocation(gpdlUrl, referer);
-      if (loc1) {
-        if (loc1.includes('link=') || loc1.includes('url=')) {
-          const match = loc1.match(/(?:dl\.php\?link|link|url)=([^"'>\s&]+)/i);
-          if (match && match[1]) {
-            const decoded = decodeURIComponent(match[1]);
-            if (this.isDirectMediaStream(decoded)) return decoded;
-          }
-        }
-        if (loc1.includes("googleusercontent.com") || loc1.includes("video-downloads") || this.isDirectMediaStream(loc1)) {
-          return loc1;
-        }
-        // Step 2: Follow worker redirect to dl.php
-        const loc2 = await this.getRedirectLocation(loc1, referer);
-        if (loc2) {
-          if (loc2.includes('link=') || loc2.includes('url=')) {
-            const match = loc2.match(/(?:dl\.php\?link|link|url)=([^"'>\s&]+)/i);
-            if (match && match[1]) {
-              const decoded = decodeURIComponent(match[1]);
-              if (this.isDirectMediaStream(decoded)) return decoded;
-            }
-          }
-          if (this.isDirectMediaStream(loc2)) return loc2;
-        }
-      }
-
-      // Step 3: Fetch HTML body and search for dl.php?link= or Google CDN URLs
-      const html = await this.httpGet(gpdlUrl, referer);
-      const dlMatch = html.match(/dl\.php\?link=([^"'>\s&]+)/i) || 
-                      html.match(/href=["'](https?:\/\/video-downloads\.googleusercontent\.com\/[^"']+)["']/i) ||
-                      html.match(/href=["'](https?:\/\/[^"']*googleusercontent\.com\/[^"']+)["']/i) ||
-                      html.match(/https?:\/\/video-downloads\.googleusercontent\.com\/[^\s"'>]+/i);
-      if (dlMatch) {
-        const raw = dlMatch[1] || dlMatch[0];
-        const decoded = decodeURIComponent(raw);
-        if (this.isDirectMediaStream(decoded)) return decoded;
+      const linkParamMatch = html.match(/(?:dl\.php\?link|link\.php\?link|\?url=|\?link=)(https?%3A%2F%2F[^\s"'<>]+|https?:\/\/[^\s"'<>]+)/i);
+      if (linkParamMatch && linkParamMatch[1]) {
+        const decoded = decodeURIComponent(linkParamMatch[1]);
+        const extracted = this.extractDirectCdnUrl(decoded);
+        if (extracted && this.isDirectMediaStream(extracted)) return extracted;
       }
     } catch (e) {
       console.warn("[ClientUtils] resolveGpdlLink error:", e?.message || e);
@@ -808,21 +927,21 @@ var ClientUtils = class {
 
       // 4. Unwrap Hubcloud intermediate landing page
       let hubcloudText = '';
-      if (currentUrl.includes("hubcloud.") || currentUrl.includes("/drive/")) {
+      if (currentUrl.includes("hubcloud.") || currentUrl.includes("/drive/") || currentUrl.includes("/video/")) {
         hubcloudText = await this.httpGet(currentUrl, startUrl);
       }
 
-      // 5. Find gamerxyt url
+      // 5. Find gamerxyt or sportverse landing url
       let vcloudLink = '';
-      const gamerMatch = (hubcloudText || hubdriveText).match(/href=["'](https?:\/\/[^"']*gamerxyt\.[^"']*)["']/i);
-      if (gamerMatch && gamerMatch[1]) vcloudLink = gamerMatch[1];
+      const gamerMatch = (hubcloudText || hubdriveText).match(/href=["'](https?:\/\/[^"']*(?:gamerxyt|sportverse|hubcloud\.php)[^"']*)["']/i);
+      if (gamerMatch && gamerMatch[1]) vcloudLink = gamerMatch[1].replace(/&amp;/g, '&');
       if (!vcloudLink) {
         const idMatch = (hubcloudText || hubdriveText).match(/<a[^>]*id=["']download["'][^>]*href=["']([^"']+)["']/i);
-        if (idMatch && idMatch[1]) vcloudLink = idMatch[1];
+        if (idMatch && idMatch[1]) vcloudLink = idMatch[1].replace(/&amp;/g, '&');
       }
       if (!vcloudLink) {
         const varMatch = (hubcloudText || hubdriveText).match(/var\s+url\s*=\s*['"]([^'"]+)['"]/i);
-        if (varMatch && varMatch[1]) vcloudLink = varMatch[1];
+        if (varMatch && varMatch[1]) vcloudLink = varMatch[1].replace(/&amp;/g, '&');
       }
 
       let vcloudText = '';
@@ -845,35 +964,8 @@ var ClientUtils = class {
         if (!link || link.startsWith('#') || link.includes('google.com/search') || link.includes('tinyurl') || link.includes('t.me') || link.includes('one.one.one') || link.includes('snvhost')) continue;
         if (link.includes('.zip') || link.includes('.rar') || text.includes('.zip') || text.includes('batch')) continue;
 
-        // 1. Direct Google CDN or GPDL / 10Gbps Server
-        if (
-          link.includes('googleusercontent.com') ||
-          link.includes('video-downloads') ||
-          link.includes('dl.php?link=') ||
-          link.includes('gpdl.hubcloud') || 
-          link.includes('pixel.hubcloud') || 
-          link.includes('gpdl.') || 
-          text.includes('10Gbps') || 
-          text.includes('Server : 10Gbps')
-        ) {
-          const directGoogle = (link.includes('googleusercontent.com') || link.includes('video-downloads'))
-            ? link
-            : await this.resolveGpdlLink(link, vcloudLink);
-          if (directGoogle && this.isDirectMediaStream(directGoogle)) {
-            streamLinks.push({
-              server: "Download [Server : 10Gbps] (Google CDN Direct Stream)",
-              url: directGoogle,
-              quality: qualityHint,
-              originalUrl: startUrl,
-              type: "direct",
-              headers: defaultHeaders,
-              mimeType: this.detectMimeType(directGoogle),
-              priority: 1
-            });
-          }
-        }
-        // 2. CF Storage (Cloudflare R2 Direct)
-        else if (link.includes('cloudflarestorage') || link.includes('r2.dev') || text.includes('FSL Server')) {
+        // 1. [Download FSL server] (Cloudflare R2 Direct) - Priority 1 (Instant Range Seeking)
+        if (link.includes('cloudflarestorage') || link.includes('r2.dev') || text.includes('FSL Server') || text.includes('FSL 4K')) {
           streamLinks.push({
             server: "Download [FSL Server] (10Gbps Cloudflare R2 Direct)",
             url: link,
@@ -885,10 +977,10 @@ var ClientUtils = class {
             priority: 1
           });
         }
-        // 3. FastDL / FSLv2
-        else if (link.includes('fastdl') || link.includes('fsl.') || link.includes('bunker.monster') || link.includes('valentine.guru') || text.includes('FastDL') || text.includes('FSLv2')) {
+        // 2. [Download FSL v2 server] (FastDL / FSLv2 / Lenin CDN / Bunker / Valentine) - Priority 2 (Instant Range Seeking)
+        else if (link.includes('fastdl') || link.includes('fsl.') || link.includes('bunker.monster') || link.includes('valentine.guru') || link.includes('pongala.life') || link.includes('lenin.buzz') || text.includes('FastDL') || text.includes('FSLv2') || text.includes('FSL v2') || text.includes('FSL Server v2')) {
           streamLinks.push({
-            server: "Download [FastDL] (Direct High-Speed Stream)",
+            server: "Download [FSL v2 server] (Fast CDN Direct Stream)",
             url: link,
             quality: qualityHint,
             originalUrl: startUrl,
@@ -898,48 +990,67 @@ var ClientUtils = class {
             priority: 2
           });
         }
-        // 4. Pixeldrain (Real direct stream link without ?download)
-        else if (link.includes('pixeld')) {
-          let cleanPixelUrl = link.replace(/[?&]download.*$/i, '');
-          if (!cleanPixelUrl.includes('api/file')) {
-            const redirected = this.getRedirectedPixelDrainUrl(hubcloudText, hubdriveText, vcloudText);
-            if (redirected) {
-              cleanPixelUrl = redirected.replace(/[?&]download.*$/i, '');
-            } else {
-              const token = cleanPixelUrl.split('/').pop()?.split('?')[0];
-              if (token && token !== 'negn6f' && token.length >= 6) {
-                cleanPixelUrl = `https://pixeldrain.dev/api/file/${token}`;
-              }
+        // 3. pixeldrain (PixelDrain Direct CDN Stream) - Priority 3 (Instant Range Seeking)
+        else if (link.includes('pixeld') || text.toLowerCase().includes('pixel')) {
+          let cleanPixelUrl = '';
+          const redirected = this.getRedirectedPixelDrainUrl(vcloudText, hubcloudText, hubdriveText);
+          if (redirected && redirected.includes('api/file')) {
+            cleanPixelUrl = redirected;
+          } else {
+            const token = link.split('/u/')[1]?.split('?')[0]?.replace(/\/+$/, '') || link.split('/').pop()?.split('?')[0];
+            if (token && token !== 'negn6f' && token.length >= 6) {
+              cleanPixelUrl = `https://pixeldrain.dev/api/file/${token}`;
             }
           }
-          if (cleanPixelUrl.includes('api/file') && !cleanPixelUrl.includes('negn6f')) {
-            const finalStreamUrl = cleanPixelUrl.replace(/[?&]download.*$/i, '');
+          if (cleanPixelUrl && cleanPixelUrl.includes('api/file') && !cleanPixelUrl.includes('negn6f')) {
+            if (!streamLinks.some(s => s.url === cleanPixelUrl)) {
+              streamLinks.push({
+                server: "Download [PixelServer] (PixelDrain Direct CDN Stream)",
+                url: cleanPixelUrl,
+                quality: qualityHint,
+                originalUrl: startUrl,
+                type: "direct",
+                headers: {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                  "Accept": "*/*"
+                },
+                mimeType: this.detectMimeType(cleanPixelUrl),
+                priority: 3
+              });
+            }
+          }
+        }
+        // 4. Watch Online streaming link on page - Priority 4
+        else if (link.includes('hdstream4u') || link.includes('hubstream') || link.includes('m4uplay') || text.toLowerCase().includes('watch online')) {
+          if (link.startsWith('http') && !link.includes('winexch') && !link.includes('snvhost') && !link.includes('tutorial')) {
             streamLinks.push({
-              server: "Download [PixelServer] (Direct CDN Stream)",
-              url: finalStreamUrl,
+              server: "Watch Online (High-Speed Stream)",
+              url: link,
               quality: qualityHint,
               originalUrl: startUrl,
-              type: "direct",
-              headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Accept": "*/*"
-              },
-              mimeType: this.detectMimeType(finalStreamUrl),
-              priority: 3
+              type: "hls",
+              headers: defaultHeaders,
+              mimeType: "application/x-mpegURL",
+              priority: 4
             });
           }
         }
-        // 5. CF Worker
+        // 5. Cloudflare Worker Stream
         else if ((link.includes('.dev') || link.includes('workers.dev')) && !link.includes('/?id=')) {
+          const workerHeaders = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Referer": "https://gamerxyt.com/"
+          };
           streamLinks.push({
             server: "Download File (Cloudflare Worker Stream)",
             url: link,
             quality: qualityHint,
             originalUrl: startUrl,
             type: "direct",
-            headers: defaultHeaders,
+            headers: workerHeaders,
             mimeType: this.detectMimeType(link),
-            priority: 4
+            priority: 5
           });
         }
         // 6. HubCDN
@@ -965,7 +1076,56 @@ var ClientUtils = class {
             type: "direct",
             headers: defaultHeaders,
             mimeType: this.detectMimeType(link),
-            priority: 2
+            priority: 5
+          });
+        }
+        // 8. Direct Google CDN or GPDL / 10Gbps Server - Strict Last Resort (Priority 99, No 206 Partial Content)
+        else if (
+          link.includes('googleusercontent.com') ||
+          link.includes('video-downloads') ||
+          link.includes('dl.php?link=') ||
+          link.includes('gpdl.hubcloud') || 
+          link.includes('pixel.hubcloud') || 
+          link.includes('pixel.') ||
+          link.includes('/?id=') ||
+          link.includes('gpdl.') || 
+          text.includes('10Gbps') || 
+          text.includes('Server : 10Gbps')
+        ) {
+          const directGoogle = (link.includes('googleusercontent.com') || link.includes('video-downloads')) && !link.includes('dl.php') && !link.includes('?url=')
+            ? link
+            : await this.resolveGpdlLink(link, vcloudLink);
+          if (directGoogle && this.isDirectMediaStream(directGoogle)) {
+            streamLinks.push({
+              server: "Download [Server : 10Gbps] (Google CDN Stream - No 206 Partial Content)",
+              url: directGoogle,
+              quality: qualityHint,
+              originalUrl: startUrl,
+              type: "direct",
+              headers: defaultHeaders,
+              mimeType: this.detectMimeType(directGoogle),
+              priority: 99
+            });
+          }
+        }
+      }
+
+      // Explicit check for Pixeldrain in scripts/HTML if not captured during anchor loop
+      if (!streamLinks.some(s => s.url.includes('pixeldrain'))) {
+        const redirected = this.getRedirectedPixelDrainUrl(vcloudText, hubcloudText, hubdriveText);
+        if (redirected && redirected.includes('api/file') && !redirected.includes('negn6f')) {
+          streamLinks.push({
+            server: "Download [PixelServer] (PixelDrain Direct CDN Stream)",
+            url: redirected,
+            quality: qualityHint,
+            originalUrl: startUrl,
+            type: "direct",
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+              "Accept": "*/*"
+            },
+            mimeType: this.detectMimeType(redirected),
+            priority: 3
           });
         }
       }
@@ -977,14 +1137,14 @@ var ClientUtils = class {
         const directUrl = gm[0].replace(/\\/g, '');
         if (this.isDirectMediaStream(directUrl) && !streamLinks.some(s => s.url === directUrl)) {
           streamLinks.push({
-            server: "Download [Server : 10Gbps] (Google CDN Direct Stream)",
+            server: "Download [Server : 10Gbps] (Google CDN Stream - No 206 Partial Content)",
             url: directUrl,
             quality: qualityHint,
             originalUrl: startUrl,
             type: "direct",
             headers: defaultHeaders,
             mimeType: this.detectMimeType(directUrl),
-            priority: 6
+            priority: 99
           });
         }
       }
@@ -1020,7 +1180,7 @@ var ClientUtils = class {
               type: "direct",
               headers: defaultHeaders,
               mimeType: this.detectMimeType(wm[0]),
-              priority: 4
+              priority: 5
             });
           }
         }
@@ -1057,6 +1217,27 @@ function parseMediaBridges(html, pageTitle = '') {
 
   const episodeMap = new Map(); // key: "s-e" -> array of { seasonNumber, episodeNumber, quality, sizeMB, url, label }
   const movieBridges = []; // array of { quality, sizeMB, url, label }
+  const watchBridges = []; // array of { url, label, quality }
+
+  // Extract any Watch Online / Stream links from post HTML
+  const allLinksRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let wMatch;
+  while ((wMatch = allLinksRegex.exec(cleanHtml)) !== null) {
+    const wUrl = wMatch[1];
+    const wText = wMatch[2].replace(/<[^>]+>/g, '').trim();
+    const lUrl = wUrl.toLowerCase();
+    const lTxt = wText.toLowerCase();
+    if (
+      lUrl.includes('hdstream4u') || lUrl.includes('hubstream') || lUrl.includes('streamhub') || lUrl.includes('m4uplay') ||
+      lTxt.includes('watch online') || lTxt.includes('player-') || lTxt === 'watch' || lTxt === 'player 1' || lTxt === 'player 2' || lTxt === 'play'
+    ) {
+      if (wUrl.startsWith('http') && !lUrl.includes('.zip') && !lUrl.includes('tutorial') && !lUrl.includes('snvhost') && !lUrl.includes('winexch')) {
+        if (!watchBridges.some(wb => wb.url === wUrl)) {
+          watchBridges.push({ url: wUrl, label: wText, quality: '1080p' });
+        }
+      }
+    }
+  }
 
   const aRegex = /<a\s+[^>]*href=["'](https?:\/\/[^"']*(?:hubdrive|hubcloud|greenmount|greenmotors|homelander|hubcdn|gamerxyt|gadgets|fastdrive|drive)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let aMatch;
@@ -1067,7 +1248,7 @@ function parseMediaBridges(html, pageTitle = '') {
     const lowerHub = hubUrl.toLowerCase();
     const lowerText = linkText.toLowerCase();
 
-    // STRICTLY IGNORE WATCH ONLINE LINKS, THIRD-PARTY EMBED PLAYERS & ARCHIVES
+    // STRICTLY IGNORE WATCH ONLINE LINKS, THIRD-PARTY EMBED PLAYERS & ARCHIVES FOR DIRECT FILE BRIDGES
     if (
       lowerHub.includes('.zip') || lowerHub.includes('.rar') || lowerHub.includes('zippack') || lowerHub.includes('zip_pack') ||
       lowerHub.includes('hdstream4u') || lowerHub.includes('hubstream') || lowerHub.includes('streamhub') ||
@@ -1239,7 +1420,30 @@ function parseMediaBridges(html, pageTitle = '') {
     list.sort((a, b) => (b.score || 0) - (a.score || 0));
   }
 
-  return { episodeMap, movieBridges, defaultPageSeason };
+  return { episodeMap, movieBridges, watchBridges, defaultPageSeason };
+}
+
+function getHubServerLabel(url, quality, providerName = 'Server 1 (HDHub4u)') {
+  if (!url) return providerName;
+  if (url.includes('cloudflarestorage') || url.includes('r2.dev')) {
+    return (quality === '4k' || quality === '2160p') ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : 'Download [FSL Server] (10Gbps Cloudflare R2 Direct)';
+  }
+  if (url.includes('fastdl') || url.includes('fsl.') || url.includes('bunker.monster') || url.includes('valentine.guru') || url.includes('pongala.life') || url.includes('lenin.buzz')) {
+    return 'Download [FSL v2 server] (Fast CDN Direct Stream)';
+  }
+  if (url.includes('pixeldrain')) {
+    return 'Download [PixelServer] (PixelDrain Direct CDN Stream)';
+  }
+  if (url.includes('hdstream4u') || url.includes('dramiyos') || url.includes('m3u8') || url.includes('m4uplay') || url.includes('hubstream') || url.includes('acek-cdn')) {
+    return 'Watch Online (High-Speed Stream)';
+  }
+  if (url.includes('workers.dev')) {
+    return 'Download File (Cloudflare Worker Stream)';
+  }
+  if (url.includes('googleusercontent.com') || url.includes('video-downloads')) {
+    return 'Download [Server : 10Gbps] (Google CDN Stream - No 206 Partial Content)';
+  }
+  return `${providerName} Direct Stream`;
 }
 
 var HDHub4uClient = class {
@@ -1251,6 +1455,29 @@ var HDHub4uClient = class {
       "https://hdhub4u.tv",
       "https://hdhub4u.bi"
     ];
+  }
+
+  setBaseUrl(url) {
+    if (url && typeof url === 'string') {
+      this.baseUrl = url.replace(/\/+$/, '');
+      if (!this.mirrors.includes(this.baseUrl)) {
+        this.mirrors.unshift(this.baseUrl);
+      }
+    }
+  }
+
+  setMirrors(mirrors) {
+    if (Array.isArray(mirrors) && mirrors.length > 0) {
+      this.mirrors = mirrors.map(m => m.replace(/\/+$/, ''));
+      if (this.mirrors.length > 0) {
+        this.baseUrl = this.mirrors[0];
+      }
+    }
+  }
+
+  applyRemoteConfig(config = {}) {
+    if (config.baseUrl) this.setBaseUrl(config.baseUrl);
+    if (Array.isArray(config.mirrors)) this.setMirrors(config.mirrors);
   }
 
   async search(query) {
@@ -1428,17 +1655,24 @@ var HDHub4uClient = class {
         const sevenTwenty = exactBridges.filter(is720p).sort((a, b) => b.sizeMB - a.sizeMB);
 
         const resolvePromises = [];
+        const liveCandidates = [];
 
         // Concurrently resolve 1080p, 4K, and 720p
         if (tenEighty.length > 0) {
           resolvePromises.push(
             (async () => {
-              for (const b of tenEighty.slice(0, 4)) {
+              for (const b of tenEighty.slice(0, 2)) {
                 try {
                   const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "1080p");
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "1080p");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    liveCandidates.push({
+                      q: live.q,
+                      url: live.url,
+                      server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                    });
                     if (live.q === '1080p') break;
                   }
                 } catch (e) {}
@@ -1447,31 +1681,44 @@ var HDHub4uClient = class {
           );
         }
 
-        const fourKCandidates = fourK.length > 0 ? fourK : exactBridges;
-        resolvePromises.push(
-          (async () => {
-            for (const b of fourKCandidates.slice(0, 4)) {
-              try {
-                const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
-                const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
-                if (live && live.url) {
-                  qualities[live.q] = live.url;
-                  if (live.q === '4k') break;
-                }
-              } catch (e) {}
-            }
-          })()
-        );
+        if (fourK.length > 0) {
+          resolvePromises.push(
+            (async () => {
+              for (const b of fourK.slice(0, 2)) {
+                try {
+                  const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
+                  const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
+                  if (live && live.url) {
+                    qualities[live.q] = live.url;
+                    liveCandidates.push({
+                      q: live.q,
+                      url: live.url,
+                      server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                    });
+                    if (live.q === '4k') break;
+                  }
+                } catch (e) {}
+              }
+            })()
+          );
+        }
 
         if (sevenTwenty.length > 0) {
           resolvePromises.push(
             (async () => {
-              for (const b of sevenTwenty.slice(0, 4)) {
+              for (const b of sevenTwenty.slice(0, 2)) {
                 try {
                   const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "720p");
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "720p");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    liveCandidates.push({
+                      q: live.q,
+                      url: live.url,
+                      server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                    });
                     if (live.q === '720p') break;
                   }
                 } catch (e) {}
@@ -1482,23 +1729,53 @@ var HDHub4uClient = class {
 
         await Promise.allSettled(resolvePromises);
 
-        if (Object.keys(qualities).length === 0) {
+        if (liveCandidates.length === 0) {
           for (const b of exactBridges.slice(0, 4)) {
             try {
               const res = await ClientUtils.resolveDeepHubCloudChain(b.url, b.quality || "1080p");
               const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, b.quality || "1080p");
               if (live && live.url) {
                 qualities[live.q] = live.url;
+                liveCandidates.push({
+                  q: live.q,
+                  url: live.url,
+                  server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
+                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                });
                 break;
               }
             } catch (e) {}
           }
         }
 
-        // 4K Quality Prioritization: 4K first, then 1080p, then 720p
-        const primaryUrl = qualities['4k'] || qualities['2160p'] || qualities['1080p'] || qualities['720p'] || Object.values(qualities)[0];
-        if (primaryUrl) {
-          const chosenQuality = (qualities['4k'] || qualities['2160p']) ? '4K' : (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : '1080p'));
+        // Check Watch Online bridges if all candidates are Google CDN (no HTTP 206) or to offer alternative
+        const hasNonGoogle = liveCandidates.some(c => (c.priority || 50) < 90);
+        if (!hasNonGoogle && watchBridges && watchBridges.length > 0) {
+          for (const wb of watchBridges) {
+            try {
+              if (wb.url.includes('hdstream4u') || wb.url.includes('hubstream') || wb.url.includes('m4uplay')) {
+                const hlsStreams = await ClientUtils.resolveHDStream4u(wb.url, '1080p');
+                if (hlsStreams && hlsStreams.length > 0) {
+                  const hls = hlsStreams[0];
+                  qualities['1080p'] = qualities['1080p'] || hls.url;
+                  liveCandidates.push({
+                    q: '1080p',
+                    url: hls.url,
+                    server: 'Watch Online (High-Speed Stream)',
+                    priority: 4
+                  });
+                  break;
+                }
+              }
+            } catch (e) {}
+          }
+        }
+
+        // Strictly prioritize: FSL (1) -> FSLv2 (2) -> Pixeldrain (3) -> Watch Online (4) -> Workers (5) -> Google CDN 10Gbps (99)
+        const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
+        if (bestCandidate) {
+          const primaryUrl = bestCandidate.url;
+          const chosenQuality = bestCandidate.q === '4k' ? '4K' : (bestCandidate.q === '1080p' ? '1080p' : (bestCandidate.q === '720p' ? '720p' : '1080p'));
           return {
             title: `${title} - Season ${targetSeason} Episode ${targetEp}`,
             seasonNumber: targetSeason,
@@ -1508,7 +1785,7 @@ var HDHub4uClient = class {
             headers: defaultHeaders,
             mimeType: ClientUtils.detectMimeType(primaryUrl),
             quality: chosenQuality,
-            server: (qualities['4k'] || qualities['2160p']) ? 'Download [Server : 10Gbps 4K] (Direct CDN Stream)' : (qualities['1080p'] ? 'Download [Server : 10Gbps 1080p] (Direct CDN Stream)' : 'Download [Server : 10Gbps] (Direct CDN Stream)')
+            server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 1 (HDHub4u)')
           };
         }
       }
@@ -1558,25 +1835,28 @@ var HDHub4uClient = class {
       const sevenTwenty = targetMovieBridges.filter(is720p).sort((a, b) => rankScore(b) - rankScore(a));
 
       const resolvePromises = [];
+      const liveCandidates = [];
 
       // Concurrently resolve 1080p, 4K, and 720p (Prioritizing Multi-Audio High GB links in parallel)
       if (tenEighty.length > 0) {
         resolvePromises.push(
           (async () => {
             const topBridges = tenEighty.slice(0, 3);
-            const resolved = await Promise.any(
-              topBridges.map(async (b) => {
+            for (const b of topBridges) {
+              try {
                 const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "1080p");
                 const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "1080p");
                 if (live && live.url) {
-                  return { q: live.q, url: live.url };
+                  qualities[live.q] = live.url;
+                  liveCandidates.push({
+                    q: live.q,
+                    url: live.url,
+                    server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
+                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                  });
+                  if (live.q === '1080p') break;
                 }
-                throw new Error("No 1080p stream");
-              })
-            ).catch(() => null);
-
-            if (resolved && resolved.url) {
-              qualities[resolved.q || '1080p'] = resolved.url;
+              } catch (e) {}
             }
           })()
         );
@@ -1586,19 +1866,21 @@ var HDHub4uClient = class {
       resolvePromises.push(
         (async () => {
           const topBridges = fourKCandidates.slice(0, 3);
-          const resolved = await Promise.any(
-            topBridges.map(async (b) => {
+          for (const b of topBridges) {
+            try {
               const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
               const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
               if (live && live.url) {
-                return { q: live.q, url: live.url };
+                qualities[live.q] = live.url;
+                liveCandidates.push({
+                  q: live.q,
+                  url: live.url,
+                  server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
+                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                });
+                if (live.q === '4k') break;
               }
-              throw new Error("No 4k stream");
-            })
-          ).catch(() => null);
-
-          if (resolved && resolved.url) {
-            qualities[resolved.q || '4k'] = resolved.url;
+            } catch (e) {}
           }
         })()
       );
@@ -1607,19 +1889,21 @@ var HDHub4uClient = class {
         resolvePromises.push(
           (async () => {
             const topBridges = sevenTwenty.slice(0, 3);
-            const resolved = await Promise.any(
-              topBridges.map(async (b) => {
+            for (const b of topBridges) {
+              try {
                 const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "720p");
                 const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "720p");
                 if (live && live.url) {
-                  return { q: live.q, url: live.url };
+                  qualities[live.q] = live.url;
+                  liveCandidates.push({
+                    q: live.q,
+                    url: live.url,
+                    server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
+                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                  });
+                  if (live.q === '720p') break;
                 }
-                throw new Error("No 720p stream");
-              })
-            ).catch(() => null);
-
-            if (resolved && resolved.url) {
-              qualities[resolved.q || '720p'] = resolved.url;
+              } catch (e) {}
             }
           })()
         );
@@ -1627,23 +1911,53 @@ var HDHub4uClient = class {
 
       await Promise.allSettled(resolvePromises);
 
-      if (Object.keys(qualities).length === 0) {
+      if (liveCandidates.length === 0) {
         for (const b of targetMovieBridges.slice(0, 10)) {
           try {
             const res = await ClientUtils.resolveDeepHubCloudChain(b.url, b.quality || "1080p");
             const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, b.quality || "1080p");
             if (live && live.url) {
               qualities[live.q] = live.url;
+              liveCandidates.push({
+                q: live.q,
+                url: live.url,
+                server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
+                priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+              });
               break;
             }
           } catch (e) {}
         }
       }
 
-      // 4K Quality Prioritization: 4K first, then 1080p, then 720p
-      const primaryUrl = qualities['4k'] || qualities['2160p'] || qualities['1080p'] || qualities['720p'] || Object.values(qualities)[0];
-      if (primaryUrl) {
-        const chosenQuality = (qualities['4k'] || qualities['2160p']) ? '4K' : (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : '1080p'));
+      // Check Watch Online bridges if all candidates are Google CDN (no HTTP 206) or to offer alternative
+      const hasNonGoogle = liveCandidates.some(c => (c.priority || 50) < 90);
+      if (!hasNonGoogle && watchBridges && watchBridges.length > 0) {
+        for (const wb of watchBridges) {
+          try {
+            if (wb.url.includes('hdstream4u') || wb.url.includes('hubstream') || wb.url.includes('m4uplay')) {
+              const hlsStreams = await ClientUtils.resolveHDStream4u(wb.url, '1080p');
+              if (hlsStreams && hlsStreams.length > 0) {
+                const hls = hlsStreams[0];
+                qualities['1080p'] = qualities['1080p'] || hls.url;
+                liveCandidates.push({
+                  q: '1080p',
+                  url: hls.url,
+                  server: 'Watch Online (High-Speed Stream)',
+                  priority: 4
+                });
+                break;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      // Strictly prioritize: FSL (1) -> FSLv2 (2) -> Pixeldrain (3) -> Watch Online (4) -> Workers (5) -> Google CDN 10Gbps (99)
+      const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
+      if (bestCandidate) {
+        const primaryUrl = bestCandidate.url;
+        const chosenQuality = bestCandidate.q === '4k' ? '4K' : (bestCandidate.q === '1080p' ? '1080p' : (bestCandidate.q === '720p' ? '720p' : '1080p'));
         return {
           title,
           streamUrl: primaryUrl,
@@ -1651,7 +1965,7 @@ var HDHub4uClient = class {
           headers: defaultHeaders,
           mimeType: ClientUtils.detectMimeType(primaryUrl),
           quality: chosenQuality,
-          server: (qualities['4k'] || qualities['2160p']) ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : (qualities['1080p'] ? 'Download [FSL 1080p Server] (10Gbps Cloudflare R2 Direct)' : 'Download [FSL Server] (10Gbps Cloudflare R2 Direct)')
+          server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 1 (HDHub4u)')
         };
       }
     }
@@ -1669,6 +1983,29 @@ var FourKHDHubClient = class {
       "https://4khdhub.top",
       "https://4khdhub.bond"
     ];
+  }
+
+  setBaseUrl(url) {
+    if (url && typeof url === 'string') {
+      this.baseUrl = url.replace(/\/+$/, '');
+      if (!this.mirrors.includes(this.baseUrl)) {
+        this.mirrors.unshift(this.baseUrl);
+      }
+    }
+  }
+
+  setMirrors(mirrors) {
+    if (Array.isArray(mirrors) && mirrors.length > 0) {
+      this.mirrors = mirrors.map(m => m.replace(/\/+$/, ''));
+      if (this.mirrors.length > 0) {
+        this.baseUrl = this.mirrors[0];
+      }
+    }
+  }
+
+  applyRemoteConfig(config = {}) {
+    if (config.baseUrl) this.setBaseUrl(config.baseUrl);
+    if (Array.isArray(config.mirrors)) this.setMirrors(config.mirrors);
   }
 
   async search(query) {
@@ -1833,17 +2170,24 @@ var FourKHDHubClient = class {
         const sevenTwenty = exactBridges.filter(is720p).sort((a, b) => b.sizeMB - a.sizeMB);
 
         const resolvePromises = [];
+        const liveCandidates = [];
 
         // Concurrently resolve 1080p, 4K, and 720p
         if (tenEighty.length > 0) {
           resolvePromises.push(
             (async () => {
-              for (const b of tenEighty.slice(0, 4)) {
+              for (const b of tenEighty.slice(0, 2)) {
                 try {
                   const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "1080p");
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "1080p");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    liveCandidates.push({
+                      q: live.q,
+                      url: live.url,
+                      server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                    });
                     if (live.q === '1080p') break;
                   }
                 } catch (e) {}
@@ -1852,31 +2196,44 @@ var FourKHDHubClient = class {
           );
         }
 
-        const fourKCandidates = fourK.length > 0 ? fourK : exactBridges;
-        resolvePromises.push(
-          (async () => {
-            for (const b of fourKCandidates.slice(0, 4)) {
-              try {
-                const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
-                const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
-                if (live && live.url) {
-                  qualities[live.q] = live.url;
-                  if (live.q === '4k') break;
-                }
-              } catch (e) {}
-            }
-          })()
-        );
+        if (fourK.length > 0) {
+          resolvePromises.push(
+            (async () => {
+              for (const b of fourK.slice(0, 2)) {
+                try {
+                  const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
+                  const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
+                  if (live && live.url) {
+                    qualities[live.q] = live.url;
+                    liveCandidates.push({
+                      q: live.q,
+                      url: live.url,
+                      server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                    });
+                    if (live.q === '4k') break;
+                  }
+                } catch (e) {}
+              }
+            })()
+          );
+        }
 
         if (sevenTwenty.length > 0) {
           resolvePromises.push(
             (async () => {
-              for (const b of sevenTwenty.slice(0, 4)) {
+              for (const b of sevenTwenty.slice(0, 2)) {
                 try {
                   const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "720p");
                   const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "720p");
                   if (live && live.url) {
                     qualities[live.q] = live.url;
+                    liveCandidates.push({
+                      q: live.q,
+                      url: live.url,
+                      server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                    });
                     if (live.q === '720p') break;
                   }
                 } catch (e) {}
@@ -1887,23 +2244,53 @@ var FourKHDHubClient = class {
 
         await Promise.allSettled(resolvePromises);
 
-        if (Object.keys(qualities).length === 0) {
+        if (liveCandidates.length === 0) {
           for (const b of exactBridges.slice(0, 10)) {
             try {
               const res = await ClientUtils.resolveDeepHubCloudChain(b.url, b.quality || "1080p");
               const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, b.quality || "1080p");
               if (live && live.url) {
                 qualities[live.q] = live.url;
+                liveCandidates.push({
+                  q: live.q,
+                  url: live.url,
+                  server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
+                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                });
                 break;
               }
             } catch (e) {}
           }
         }
 
-        // 4K Quality Prioritization: 4K first, then 1080p, then 720p
-        const primaryUrl = qualities['4k'] || qualities['2160p'] || qualities['1080p'] || qualities['720p'] || Object.values(qualities)[0];
-        if (primaryUrl) {
-          const chosenQuality = (qualities['4k'] || qualities['2160p']) ? '4K' : (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : '1080p'));
+        // Check Watch Online bridges if all candidates are Google CDN (no HTTP 206) or to offer alternative
+        const hasNonGoogle = liveCandidates.some(c => (c.priority || 50) < 90);
+        if (!hasNonGoogle && watchBridges && watchBridges.length > 0) {
+          for (const wb of watchBridges) {
+            try {
+              if (wb.url.includes('hdstream4u') || wb.url.includes('hubstream') || wb.url.includes('m4uplay')) {
+                const hlsStreams = await ClientUtils.resolveHDStream4u(wb.url, '1080p');
+                if (hlsStreams && hlsStreams.length > 0) {
+                  const hls = hlsStreams[0];
+                  qualities['1080p'] = qualities['1080p'] || hls.url;
+                  liveCandidates.push({
+                    q: '1080p',
+                    url: hls.url,
+                    server: 'Watch Online (High-Speed Stream)',
+                    priority: 4
+                  });
+                  break;
+                }
+              }
+            } catch (e) {}
+          }
+        }
+
+        // Strictly prioritize: FSL (1) -> FSLv2 (2) -> Pixeldrain (3) -> Watch Online (4) -> Workers (5) -> Google CDN 10Gbps (99)
+        const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
+        if (bestCandidate) {
+          const primaryUrl = bestCandidate.url;
+          const chosenQuality = bestCandidate.q === '4k' ? '4K' : (bestCandidate.q === '1080p' ? '1080p' : (bestCandidate.q === '720p' ? '720p' : '1080p'));
           return {
             title: `${title} - Season ${targetSeason} Episode ${targetEp}`,
             seasonNumber: targetSeason,
@@ -1913,7 +2300,7 @@ var FourKHDHubClient = class {
             headers: defaultHeaders,
             mimeType: ClientUtils.detectMimeType(primaryUrl),
             quality: chosenQuality,
-            server: (qualities['4k'] || qualities['2160p']) ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : (qualities['1080p'] ? 'Download [Server : 10Gbps 1080p] (Direct CDN Stream)' : 'Download [Server : 10Gbps] (Direct CDN Stream)')
+            server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 2 (4KHDHub)')
           };
         }
       }
@@ -1963,25 +2350,28 @@ var FourKHDHubClient = class {
       const sevenTwenty = targetMovieBridges.filter(is720p).sort((a, b) => rankScore(b) - rankScore(a));
 
       const resolvePromises = [];
+      const liveCandidates = [];
 
       // Concurrently resolve 1080p, 4K, and 720p (Prioritizing Multi-Audio High GB links in parallel)
       if (tenEighty.length > 0) {
         resolvePromises.push(
           (async () => {
             const topBridges = tenEighty.slice(0, 3);
-            const resolved = await Promise.any(
-              topBridges.map(async (b) => {
+            for (const b of topBridges) {
+              try {
                 const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "1080p");
                 const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "1080p");
                 if (live && live.url) {
-                  return { q: live.q, url: live.url };
+                  qualities[live.q] = live.url;
+                  liveCandidates.push({
+                    q: live.q,
+                    url: live.url,
+                    server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
+                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                  });
+                  if (live.q === '1080p') break;
                 }
-                throw new Error("No 1080p stream");
-              })
-            ).catch(() => null);
-
-            if (resolved && resolved.url) {
-              qualities[resolved.q || '1080p'] = resolved.url;
+              } catch (e) {}
             }
           })()
         );
@@ -1991,19 +2381,21 @@ var FourKHDHubClient = class {
       resolvePromises.push(
         (async () => {
           const topBridges = fourKCandidates.slice(0, 3);
-          const resolved = await Promise.any(
-            topBridges.map(async (b) => {
+          for (const b of topBridges) {
+            try {
               const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "4k");
               const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "4k");
               if (live && live.url) {
-                return { q: live.q, url: live.url };
+                qualities[live.q] = live.url;
+                liveCandidates.push({
+                  q: live.q,
+                  url: live.url,
+                  server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
+                  priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                });
+                if (live.q === '4k') break;
               }
-              throw new Error("No 4k stream");
-            })
-          ).catch(() => null);
-
-          if (resolved && resolved.url) {
-            qualities[resolved.q || '4k'] = resolved.url;
+            } catch (e) {}
           }
         })()
       );
@@ -2012,19 +2404,21 @@ var FourKHDHubClient = class {
         resolvePromises.push(
           (async () => {
             const topBridges = sevenTwenty.slice(0, 3);
-            const resolved = await Promise.any(
-              topBridges.map(async (b) => {
+            for (const b of topBridges) {
+              try {
                 const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "720p");
                 const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "720p");
                 if (live && live.url) {
-                  return { q: live.q, url: live.url };
+                  qualities[live.q] = live.url;
+                  liveCandidates.push({
+                    q: live.q,
+                    url: live.url,
+                    server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
+                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+                  });
+                  if (live.q === '720p') break;
                 }
-                throw new Error("No 720p stream");
-              })
-            ).catch(() => null);
-
-            if (resolved && resolved.url) {
-              qualities[resolved.q || '720p'] = resolved.url;
+              } catch (e) {}
             }
           })()
         );
@@ -2032,23 +2426,53 @@ var FourKHDHubClient = class {
 
       await Promise.allSettled(resolvePromises);
 
-      if (Object.keys(qualities).length === 0) {
+      if (liveCandidates.length === 0) {
         for (const b of targetMovieBridges.slice(0, 10)) {
           try {
             const res = await ClientUtils.resolveDeepHubCloudChain(b.url, b.quality || "1080p");
             const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, b.quality || "1080p");
             if (live && live.url) {
               qualities[live.q] = live.url;
+              liveCandidates.push({
+                q: live.q,
+                url: live.url,
+                server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
+                priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server)
+              });
               break;
             }
           } catch (e) {}
         }
       }
 
-      // 4K Quality Prioritization: 4K first, then 1080p, then 720p
-      const primaryUrl = qualities['4k'] || qualities['2160p'] || qualities['1080p'] || qualities['720p'] || Object.values(qualities)[0];
-      if (primaryUrl) {
-        const chosenQuality = (qualities['4k'] || qualities['2160p']) ? '4K' : (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : '1080p'));
+      // Check Watch Online bridges if all candidates are Google CDN (no HTTP 206) or to offer alternative
+      const hasNonGoogle = liveCandidates.some(c => (c.priority || 50) < 90);
+      if (!hasNonGoogle && watchBridges && watchBridges.length > 0) {
+        for (const wb of watchBridges) {
+          try {
+            if (wb.url.includes('hdstream4u') || wb.url.includes('hubstream') || wb.url.includes('m4uplay')) {
+              const hlsStreams = await ClientUtils.resolveHDStream4u(wb.url, '1080p');
+              if (hlsStreams && hlsStreams.length > 0) {
+                const hls = hlsStreams[0];
+                qualities['1080p'] = qualities['1080p'] || hls.url;
+                liveCandidates.push({
+                  q: '1080p',
+                  url: hls.url,
+                  server: 'Watch Online (High-Speed Stream)',
+                  priority: 4
+                });
+                break;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      // Strictly prioritize: FSL (1) -> FSLv2 (2) -> Pixeldrain (3) -> Watch Online (4) -> Workers (5) -> Google CDN 10Gbps (99)
+      const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
+      if (bestCandidate) {
+        const primaryUrl = bestCandidate.url;
+        const chosenQuality = bestCandidate.q === '4k' ? '4K' : (bestCandidate.q === '1080p' ? '1080p' : (bestCandidate.q === '720p' ? '720p' : '1080p'));
         return {
           title,
           streamUrl: primaryUrl,
@@ -2056,7 +2480,7 @@ var FourKHDHubClient = class {
           headers: defaultHeaders,
           mimeType: ClientUtils.detectMimeType(primaryUrl),
           quality: chosenQuality,
-          server: (qualities['4k'] || qualities['2160p']) ? 'Download [FSL 4K Server] (10Gbps Cloudflare R2 Direct)' : (qualities['1080p'] ? 'Download [FSL 1080p Server] (10Gbps Cloudflare R2 Direct)' : 'Download [FSL Server] (10Gbps Cloudflare R2 Direct)')
+          server: bestCandidate.server || getHubServerLabel(primaryUrl, chosenQuality, 'Server 2 (4KHDHub)')
         };
       }
     }
@@ -2117,6 +2541,16 @@ var UniversalClientScraper = class {
       mimeType: link.mimeType || "video/mp4"
     };
   }
+
+  applyRemoteConfig(config = {}) {
+    if (config.providers) {
+      if (config.providers.hdhub4u) this.hdhub4u.applyRemoteConfig(config.providers.hdhub4u);
+      if (config.providers['4khdhub']) this.fourkhdhub.applyRemoteConfig(config.providers['4khdhub']);
+      if (config.providers.movies4u && this.movies4u && typeof this.movies4u.applyRemoteConfig === 'function') {
+        this.movies4u.applyRemoteConfig(config.providers.movies4u);
+      }
+    }
+  }
 };
 
 var HDHub4u = new HDHub4uClient();
@@ -2132,6 +2566,10 @@ globalObj.getPlayableStream = (url, ep, s) => UniversalScraper.getPlayableStream
 globalObj.calculateTitleMatchScore = calculateTitleMatchScore;
 globalObj.findBestMatch = findBestMatch;
 
+export const getStreamPriority = (url, s) => ClientUtils.getStreamPriority(url, s);
+export const getQualityWeight = (q) => ClientUtils.getQualityWeight(q);
+export const selectBestStreamCandidate = (c) => ClientUtils.selectBestStreamCandidate(c);
+
 export {
   Movies4u,
   Movies4uClient,
@@ -2146,5 +2584,7 @@ export {
   findBestMatch,
   normalizeString,
   cleanTitleKeywords,
-  parseMediaBridges
+  parseMediaBridges,
+  getStreamPriority as getPriority,
+  selectBestStreamCandidate as selectBestCandidate
 };

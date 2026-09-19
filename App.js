@@ -73,6 +73,7 @@ import {
 import { TMDB_BASE_URL, TMDB_API_KEY } from './src/config/tmdb';
 import { scale, verticalScale, moderateScale } from './src/utils/responsive';
 import { requestAppPermissions } from './src/utils/permissions';
+import { ProviderUpdateManager } from './src/utils/ProviderUpdateManager';
 
 const INITIAL_FALLBACK_MOVIES = [
   {
@@ -247,6 +248,8 @@ export default function App() {
   useEffect(() => {
     // Request Android required permissions on initial launch
     requestAppPermissions();
+    // Initialize OTA Scraper & Provider Dynamic Update Manager from GitHub
+    ProviderUpdateManager.init({ autoCheck: true });
 
     async function loadData() {
       try {

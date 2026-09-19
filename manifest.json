@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "version": "1.0.2",
+  "updatedAt": "2026-09-18T18:18:01.940Z",
+  "commitSha": "77be7d8",
+  "name": "NexPlay Providers Configuration",
+  "description": "Dynamic Over-The-Air scraper and provider definitions for NexPlay & Stitch-Nexplay",
+  "providers": {
+    "hdhub4u": {
+      "id": "hdhub4u",
+      "name": "Server 1 (HDHub4u)",
+      "enabled": true,
+      "priority": 1,
+      "baseUrl": "https://new5.hdhub4u.cl",
+      "mirrors": [
+        "https://new5.hdhub4u.cl",
+        "https://hdhub4u.ms",
+        "https://hdhub4u.tv",
+        "https://hdhub4u.bi"
+      ],
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "*/*"
+      },
+      "features": {
+        "movieResolution": true,
+        "tvShowResolution": true,
+        "multiAudio": true,
+        "directR2Streams": true
+      }
+    },
+    "4khdhub": {
+      "id": "4khdhub",
+      "name": "Server 2 (4KHDHub)",
+      "enabled": true,
+      "priority": 2,
+      "baseUrl": "https://4khdhub.one",
+      "mirrors": [
+        "https://4khdhub.one",
+        "https://4khdhub.dad",
+        "https://4khdhub.top",
+        "https://4khdhub.bond"
+      ],
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "*/*"
+      },
+      "features": {
+        "movieResolution": true,
+        "tvShowResolution": true,
+        "fourKStreamPrioritization": true,
+        "directR2Streams": true
+      }
+    },
+    "movies4u": {
+      "id": "movies4u",
+      "name": "Server 3 (Movies4u)",
+      "enabled": true,
+      "priority": 3,
+      "baseUrl": "https://new6.movies4u.clinic",
+      "mirrors": [
+        "https://new6.movies4u.clinic",
+        "https://movies4u.co",
+        "https://movies4u.clinic",
+        "https://movies4u.vip"
+      ],
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://movies4u.co/"
+      },
+      "features": {
+        "movieResolution": true,
+        "tvShowResolution": true,
+        "packerUnpacker": true,
+        "directR2Streams": true
+      }
+    }
+  },
+  "dns": {
+    "defaultProvider": "google",
+    "dohEndpoints": [
+      "https://8.8.8.8/resolve",
+      "https://1.1.1.1/dns-query",
+      "https://dns.adguard-dns.com/resolve"
+    ]
+  },
+  "changeLog": [
+    "Deprioritize 10Gbps Google CDN (no HTTP 206 partial content range support) and prioritize FSL -> FSLv2 -> Pixeldrain -> Watch Online across all providers",
+    "Multi-server direct 10Gbps stream resolution configuration",
+    "Initial dynamic OTA manifest setup for NexPlay"
+  ]
+}
