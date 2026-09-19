@@ -172,6 +172,16 @@ class ExtensionManagerService {
     }
 
     allMatches.sort((a, b) => b.matchScore - a.matchScore);
+
+    // Strict Server 1 (HDHub4u) & Server 2 (4KHDHub) rule: If both WEB-DL and WEBRip are available, consider ONLY WEB-DL
+    if (activeProvider === 'hdhub4u' || activeProvider === '4khdhub') {
+      const isDl = (m) => /\bweb[-._]?dl\b/i.test(((m.match?.title || '') + ' ' + (m.match?.link || '')).toLowerCase());
+      const isRip = (m) => /\b(?:web[-._]?rip|webrip)\b/i.test(((m.match?.title || '') + ' ' + (m.match?.link || '')).toLowerCase());
+      if (allMatches.some(isDl) && allMatches.some(isRip)) {
+        allMatches = allMatches.filter(m => !isRip(m));
+      }
+    }
+
     return allMatches;
   }
 
@@ -256,12 +266,12 @@ class ExtensionManagerService {
       if (playable && playable.streamUrl) {
         const streamList = [];
         if (playable.qualities && Object.keys(playable.qualities).length > 0) {
-          const orderedKeys = ['4k', '2160p', '1080p', '720p', ...Object.keys(playable.qualities).filter(k => !['4k', '2160p', '1080p', '720p'].includes(k))];
+          const orderedKeys = ['4k', '2160p', '1080p', '720p', '480p', ...Object.keys(playable.qualities).filter(k => !['4k', '2160p', '1080p', '720p', '480p'].includes(k))];
           for (const q of orderedKeys) {
             if (playable.qualities[q]) {
               streamList.push({
                 link: playable.qualities[q],
-                quality: (q.toUpperCase() === '4K' || q === '2160p') ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : q)),
+                quality: (q.toUpperCase() === '4K' || q === '2160p') ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : (q === '480p' ? '480p' : q))),
                 server: playable.server || 'Movies4u Direct',
                 headers: playable.headers,
                 mimeType: playable.mimeType
@@ -287,12 +297,12 @@ class ExtensionManagerService {
       if (playable && playable.streamUrl) {
         const streamList = [];
         if (playable.qualities && Object.keys(playable.qualities).length > 0) {
-          const orderedKeys = ['4k', '2160p', '1080p', '720p', ...Object.keys(playable.qualities).filter(k => !['4k', '2160p', '1080p', '720p'].includes(k))];
+          const orderedKeys = ['4k', '2160p', '1080p', '720p', '480p', ...Object.keys(playable.qualities).filter(k => !['4k', '2160p', '1080p', '720p', '480p'].includes(k))];
           for (const q of orderedKeys) {
             if (playable.qualities[q]) {
               streamList.push({
                 link: playable.qualities[q],
-                quality: (q.toUpperCase() === '4K' || q === '2160p') ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : q)),
+                quality: (q.toUpperCase() === '4K' || q === '2160p') ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : (q === '480p' ? '480p' : q))),
                 server: playable.server || 'Direct Stream',
                 headers: playable.headers,
                 mimeType: playable.mimeType

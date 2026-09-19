@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.2",
-  "updatedAt": "2026-09-18T18:18:01.940Z",
-  "commitSha": "77be7d8",
+  "version": "1.0.3",
+  "updatedAt": "2026-09-19T03:22:00.000Z",
+  "commitSha": "9e2c4b1",
   "name": "NexPlay Providers Configuration",
   "description": "Dynamic Over-The-Air scraper and provider definitions for NexPlay & Stitch-Nexplay",
   "providers": {
@@ -85,8 +85,10 @@
     ]
   },
   "changeLog": [
+    "Always scrape all qualities (480p, 720p, 1080p, 4K) concurrently and post to ExoPlayer qualities map",
+    "Strict WEB-DL exclusivity over WEBRip for Server 1 (HDHub4u) and Server 2 (4KHDHub)",
+    "Instant 0ms programmatic Greenmotors timer countdown bypass via 5-step token decryption",
     "Deprioritize 10Gbps Google CDN (no HTTP 206 partial content range support) and prioritize FSL -> FSLv2 -> Pixeldrain -> Watch Online across all providers",
-    "Multi-server direct 10Gbps stream resolution configuration",
-    "Initial dynamic OTA manifest setup for NexPlay"
+    "Multi-server direct 10Gbps stream resolution configuration"
   ]
 }

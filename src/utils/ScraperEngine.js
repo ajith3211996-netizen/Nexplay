@@ -1351,23 +1351,28 @@ function parseMediaBridges(html, pageTitle = '') {
     if (/\b(2160p|4k\s*uhd|4k\s*hdr|\b4k\b|2160|uhd)\b/i.test(linkText)) linkQuality = '4k';
     else if (/\b(1080p|fhd|1080)\b/i.test(linkText)) linkQuality = '1080p';
     else if (/\b(720p|720|\bhd\b)\b/i.test(linkText)) linkQuality = '720p';
+    else if (/\b(480p|480|sd)\b/i.test(linkText)) linkQuality = '480p';
 
     const pos4K = findLastRegexIndex(/\b(2160p|4k\s*uhd|4k\s*hdr|\b4k\b|2160|uhd)\b/i, precedingContext);
     const pos1080p = findLastRegexIndex(/\b(1080p|fhd|1080)\b/i, precedingContext);
     const pos720p = findLastRegexIndex(/\b(720p|720)\b|\bhd\b(?!\s*hub|\s*stream|\s*r)/i, precedingContext);
+    const pos480p = findLastRegexIndex(/\b(480p|480|sd)\b/i, precedingContext);
 
     let quality = '1080p';
     if (linkQuality) {
       quality = linkQuality;
-    } else if (pos4K !== -1 || pos1080p !== -1 || pos720p !== -1) {
-      const maxPos = Math.max(pos4K, pos1080p, pos720p);
+    } else if (pos4K !== -1 || pos1080p !== -1 || pos720p !== -1 || pos480p !== -1) {
+      const maxPos = Math.max(pos4K, pos1080p, pos720p, pos480p);
       if (maxPos === pos4K) quality = '4k';
       else if (maxPos === pos1080p) quality = '1080p';
-      else quality = '720p';
+      else if (maxPos === pos720p) quality = '720p';
+      else quality = '480p';
     } else if (/\b(2160p|4k\s*uhd|4k\s*hdr|\b4k\b|2160|uhd)\b/i.test(combined)) {
       quality = '4k';
     } else if (/\b(720p|hd|720)\b/i.test(combined)) {
       quality = '720p';
+    } else if (/\b(480p|480|sd)\b/i.test(combined)) {
+      quality = '480p';
     }
 
     // File size detection (Prioritize linkText, then closest precedingContext size)
@@ -1393,10 +1398,10 @@ function parseMediaBridges(html, pageTitle = '') {
       }
     }
 
-    // Fidelity tag matching & scoring (x265, HEVC, HDR, SDR, DV, Multi, 10-bit, Remux, BluRay)
+    // Fidelity tag matching & scoring (x265, HEVC, HDR, SDR, DV, Multi, 10-bit, Remux, BluRay, WEB-DL)
     const targetKeywords = [
       'hevc', 'hdr', 'hdr10', 'hdr10+', 'sdr', 'dv', 'dolby vision', 'multi audio', 'multi', 'dual audio', 
-      'x265', 'x264', 'h.265', 'h.264', '10bit', '10-bit', 'atmos', 'dts', 'ddp5.1', 'web-dl', 'bluray', 'remux'
+      'x265', 'x264', 'h.265', 'h.264', '10bit', '10-bit', 'atmos', 'dts', 'ddp5.1', 'web-dl', 'webrip', 'bluray', 'remux'
     ];
     const highExtensionSet = new Set(['hevc', 'hdr', 'hdr10', 'hdr10+', 'sdr', 'dv', 'dolby vision', 'multi audio', 'multi', 'dual audio', 'x265', 'x264', 'h.265', 'h.264', '10bit', '10-bit']);
     const matchedTags = [];
@@ -1411,8 +1416,8 @@ function parseMediaBridges(html, pageTitle = '') {
       }
     }
     
-    // Resolution base score (4K: 500, 1080p: 250, 720p: 100)
-    const resScore = quality === '4k' ? 500 : (quality === '1080p' ? 250 : 100);
+    // Resolution base score (4K: 500, 1080p: 250, 720p: 100, 480p: 50)
+    const resScore = quality === '4k' ? 500 : (quality === '1080p' ? 250 : (quality === '720p' ? 100 : 50));
     const tagScore = matchedTags.length * 25 + (highExtMatches > 0 ? 50 : 0);
     const sizeScore = Math.min(150, Math.round(sizeMB / 100));
     const totalScore = resScore + tagScore + sizeScore;
@@ -1437,13 +1442,29 @@ function parseMediaBridges(html, pageTitle = '') {
     }
   }
 
-  // Sort candidates by fidelity score descending
-  movieBridges.sort((a, b) => (b.score || 0) - (a.score || 0));
+  // Helper: If both WEB-DL and WEBRip are available, strictly consider ONLY WEB-DL
+  const filterWebDlOverWebRip = (bridgeList) => {
+    if (!Array.isArray(bridgeList) || bridgeList.length === 0) return bridgeList;
+    const isWebDl = (b) => /\bweb[-._]?dl\b/i.test(((b.label || '') + ' ' + (b.url || '') + ' ' + (b.tags?.join(' ') || '')).toLowerCase());
+    const isWebRip = (b) => /\b(?:web[-._]?rip|webrip)\b/i.test(((b.label || '') + ' ' + (b.url || '') + ' ' + (b.tags?.join(' ') || '')).toLowerCase());
+    const hasWebDl = bridgeList.some(isWebDl);
+    const hasWebRip = bridgeList.some(isWebRip);
+    if (hasWebDl && hasWebRip) {
+      return bridgeList.filter(b => !isWebRip(b));
+    }
+    return bridgeList;
+  };
+
+  const finalMovieBridges = filterWebDlOverWebRip(movieBridges);
+  finalMovieBridges.sort((a, b) => (b.score || 0) - (a.score || 0));
+
   for (const [key, list] of episodeMap.entries()) {
-    list.sort((a, b) => (b.score || 0) - (a.score || 0));
+    const filteredList = filterWebDlOverWebRip(list);
+    filteredList.sort((a, b) => (b.score || 0) - (a.score || 0));
+    episodeMap.set(key, filteredList);
   }
 
-  return { episodeMap, movieBridges, watchBridges, defaultPageSeason };
+  return { episodeMap, movieBridges: finalMovieBridges, watchBridges, defaultPageSeason };
 }
 
 function getHubServerLabel(url, quality, providerName = 'Server 1 (HDHub4u)') {
@@ -1672,15 +1693,36 @@ var HDHub4uClient = class {
           return /\b(720p?|720)\b|\bhd\b(?!\s*hub|\s*stream|\s*r)/i.test(cleanText) ||
                  /\b(720p?|720)\b|\bhd\b(?!\s*hub|\s*stream|\s*r)/i.test(cleanUrl);
         };
+        const is480p = (b) => {
+          if (is4K(b) || is1080p(b) || is720p(b)) return false;
+          const q = (b.quality || '').toLowerCase();
+          if (q === '480p' || q === '480' || q === 'sd') return true;
+          const cleanText = (b.label || '').replace(/4khdhub\.[a-z0-9]+/gi, '').replace(/hdhub4u\.[a-z0-9]+/gi, '').replace(/4khdhub|hdhub4u/gi, '');
+          const cleanUrl = (b.url || '').replace(/4khdhub\.[a-z0-9]+/gi, '').replace(/hdhub4u\.[a-z0-9]+/gi, '').replace(/4khdhub|hdhub4u/gi, '');
+          return /\b(480p?|480|sd)\b/i.test(cleanText) ||
+                 /\b(480p?|480|sd)\b/i.test(cleanUrl);
+        };
 
-        const fourK = exactBridges.filter(is4K).sort((a, b) => b.sizeMB - a.sizeMB);
-        const tenEighty = exactBridges.filter(is1080p).sort((a, b) => b.sizeMB - a.sizeMB);
-        const sevenTwenty = exactBridges.filter(is720p).sort((a, b) => b.sizeMB - a.sizeMB);
+        // Strict Server 1 & Server 2 rule: If both WEB-DL and WEBRip are available, consider ONLY WEB-DL
+        const filterWebDl = (bList) => {
+          const isDl = (b) => /\bweb[-._]?dl\b/i.test(((b.label || '') + ' ' + (b.url || '')).toLowerCase());
+          const isRip = (b) => /\b(?:web[-._]?rip|webrip)\b/i.test(((b.label || '') + ' ' + (b.url || '')).toLowerCase());
+          if (bList.some(isDl) && bList.some(isRip)) {
+            return bList.filter(b => !isRip(b));
+          }
+          return bList;
+        };
+
+        const activeBridges = filterWebDl(exactBridges);
+        const fourK = filterWebDl(activeBridges.filter(is4K).sort((a, b) => b.sizeMB - a.sizeMB));
+        const tenEighty = filterWebDl(activeBridges.filter(is1080p).sort((a, b) => b.sizeMB - a.sizeMB));
+        const sevenTwenty = filterWebDl(activeBridges.filter(is720p).sort((a, b) => b.sizeMB - a.sizeMB));
+        const fourEighty = filterWebDl(activeBridges.filter(is480p).sort((a, b) => b.sizeMB - a.sizeMB));
 
         const resolvePromises = [];
         const liveCandidates = [];
 
-        // Concurrently resolve 1080p, 4K, and 720p
+        // Concurrently resolve all 4 qualities (1080p, 4K, 720p, 480p)
         if (tenEighty.length > 0) {
           resolvePromises.push(
             (async () => {
@@ -1746,6 +1788,30 @@ var HDHub4uClient = class {
                       supports206: live.item?.supports206 ?? true
                     });
                     if (live.q === '720p') break;
+                  }
+                } catch (e) {}
+              }
+            })()
+          );
+        }
+
+        if (fourEighty.length > 0) {
+          resolvePromises.push(
+            (async () => {
+              for (const b of fourEighty.slice(0, 2)) {
+                try {
+                  const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "480p");
+                  const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "480p");
+                  if (live && live.url) {
+                    qualities[live.q] = live.url;
+                    liveCandidates.push({
+                      q: live.q,
+                      url: live.url,
+                      server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                      supports206: live.item?.supports206 ?? true
+                    });
+                    if (live.q === '480p') break;
                   }
                 } catch (e) {}
               }
@@ -1821,8 +1887,20 @@ var HDHub4uClient = class {
     }
 
     // Movie stream resolution
-    const targetMovieBridges = movieBridges.length > 0 ? movieBridges : Array.from(episodeMap.values()).flat();
-    if (targetMovieBridges.length > 0) {
+    const rawMovieBridges = movieBridges.length > 0 ? movieBridges : Array.from(episodeMap.values()).flat();
+    if (rawMovieBridges.length > 0) {
+      // Strict Server 1 & Server 2 rule: If both WEB-DL and WEBRip are available, consider ONLY WEB-DL
+      const filterWebDl = (bList) => {
+        const isDl = (b) => /\bweb[-._]?dl\b/i.test(((b.label || '') + ' ' + (b.url || '')).toLowerCase());
+        const isRip = (b) => /\b(?:web[-._]?rip|webrip)\b/i.test(((b.label || '') + ' ' + (b.url || '')).toLowerCase());
+        if (bList.some(isDl) && bList.some(isRip)) {
+          return bList.filter(b => !isRip(b));
+        }
+        return bList;
+      };
+
+      const targetMovieBridges = filterWebDl(rawMovieBridges);
+
       const is4K = (b) => {
         const q = (b.quality || '').toLowerCase();
         if (q === '4k' || q === '2160p' || q === 'uhd') return true;
@@ -1849,6 +1927,15 @@ var HDHub4uClient = class {
         return /\b(720p?|720)\b|\bhd\b(?!\s*hub|\s*stream|\s*r)/i.test(cleanText) ||
                /\b(720p?|720)\b|\bhd\b(?!\s*hub|\s*stream|\s*r)/i.test(cleanUrl);
       };
+      const is480p = (b) => {
+        if (is4K(b) || is1080p(b) || is720p(b)) return false;
+        const q = (b.quality || '').toLowerCase();
+        if (q === '480p' || q === '480' || q === 'sd') return true;
+        const cleanText = (b.label || '').replace(/4khdhub\.[a-z0-9]+/gi, '').replace(/hdhub4u\.[a-z0-9]+/gi, '').replace(/4khdhub|hdhub4u/gi, '');
+        const cleanUrl = (b.url || '').replace(/4khdhub\.[a-z0-9]+/gi, '').replace(/hdhub4u\.[a-z0-9]+/gi, '').replace(/4khdhub|hdhub4u/gi, '');
+        return /\b(480p?|480|sd)\b/i.test(cleanText) ||
+               /\b(480p?|480|sd)\b/i.test(cleanUrl);
+      };
 
       const rankScore = (b) => {
         let score = (b.sizeMB || 0);
@@ -1859,14 +1946,15 @@ var HDHub4uClient = class {
         return score;
       };
 
-      const fourK = targetMovieBridges.filter(is4K).sort((a, b) => rankScore(b) - rankScore(a));
-      const tenEighty = targetMovieBridges.filter(is1080p).sort((a, b) => rankScore(b) - rankScore(a));
-      const sevenTwenty = targetMovieBridges.filter(is720p).sort((a, b) => rankScore(b) - rankScore(a));
+      const fourK = filterWebDl(targetMovieBridges.filter(is4K).sort((a, b) => rankScore(b) - rankScore(a)));
+      const tenEighty = filterWebDl(targetMovieBridges.filter(is1080p).sort((a, b) => rankScore(b) - rankScore(a)));
+      const sevenTwenty = filterWebDl(targetMovieBridges.filter(is720p).sort((a, b) => rankScore(b) - rankScore(a)));
+      const fourEighty = filterWebDl(targetMovieBridges.filter(is480p).sort((a, b) => rankScore(b) - rankScore(a)));
 
       const resolvePromises = [];
       const liveCandidates = [];
 
-      // Concurrently resolve 1080p, 4K, and 720p (Prioritizing Multi-Audio High GB links in parallel)
+      // Concurrently resolve all 4 qualities (1080p, 4K, 720p, 480p)
       if (tenEighty.length > 0) {
         resolvePromises.push(
           (async () => {
@@ -1941,6 +2029,31 @@ var HDHub4uClient = class {
         );
       }
 
+      if (fourEighty.length > 0) {
+        resolvePromises.push(
+          (async () => {
+            const topBridges = fourEighty.slice(0, 3);
+            for (const b of topBridges) {
+              try {
+                const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "480p");
+                const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "480p");
+                if (live && live.url) {
+                  qualities[live.q] = live.url;
+                  liveCandidates.push({
+                    q: live.q,
+                    url: live.url,
+                    server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 1 (HDHub4u)'),
+                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                    supports206: live.item?.supports206 ?? true
+                  });
+                  if (live.q === '480p') break;
+                }
+              } catch (e) {}
+            }
+          })()
+        );
+      }
+
       await Promise.allSettled(resolvePromises);
 
       if (liveCandidates.length === 0) {
@@ -1991,7 +2104,7 @@ var HDHub4uClient = class {
       const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
       if (bestCandidate) {
         const primaryUrl = bestCandidate.url;
-        const chosenQuality = bestCandidate.q === '4k' ? '4K' : (bestCandidate.q === '1080p' ? '1080p' : (bestCandidate.q === '720p' ? '720p' : '1080p'));
+        const chosenQuality = bestCandidate.q === '4k' ? '4K' : (bestCandidate.q === '1080p' ? '1080p' : (bestCandidate.q === '720p' ? '720p' : (bestCandidate.q === '480p' ? '480p' : '1080p')));
         return {
           title,
           streamUrl: primaryUrl,
@@ -2200,14 +2313,36 @@ var FourKHDHubClient = class {
                  /\b(720p?|720)\b|\bhd\b(?!\s*hub|\s*stream|\s*r)/i.test(cleanUrl);
         };
 
-        const fourK = exactBridges.filter(is4K).sort((a, b) => b.sizeMB - a.sizeMB);
-        const tenEighty = exactBridges.filter(is1080p).sort((a, b) => b.sizeMB - a.sizeMB);
-        const sevenTwenty = exactBridges.filter(is720p).sort((a, b) => b.sizeMB - a.sizeMB);
+        const is480p = (b) => {
+          if (is4K(b) || is1080p(b) || is720p(b)) return false;
+          const q = (b.quality || '').toLowerCase();
+          if (q === '480p' || q === '480' || q === 'sd') return true;
+          const cleanText = (b.label || '').replace(/4khdhub\.[a-z0-9]+/gi, '').replace(/hdhub4u\.[a-z0-9]+/gi, '').replace(/4khdhub|hdhub4u/gi, '');
+          const cleanUrl = (b.url || '').replace(/4khdhub\.[a-z0-9]+/gi, '').replace(/hdhub4u\.[a-z0-9]+/gi, '').replace(/4khdhub|hdhub4u/gi, '');
+          return /\b(480p?|480|sd)\b/i.test(cleanText) ||
+                 /\b(480p?|480|sd)\b/i.test(cleanUrl);
+        };
+
+        // Strict Server 1 & Server 2 rule: If both WEB-DL and WEBRip are available, consider ONLY WEB-DL
+        const filterWebDl = (bList) => {
+          const isDl = (b) => /\bweb[-._]?dl\b/i.test(((b.label || '') + ' ' + (b.url || '')).toLowerCase());
+          const isRip = (b) => /\b(?:web[-._]?rip|webrip)\b/i.test(((b.label || '') + ' ' + (b.url || '')).toLowerCase());
+          if (bList.some(isDl) && bList.some(isRip)) {
+            return bList.filter(b => !isRip(b));
+          }
+          return bList;
+        };
+
+        const activeBridges = filterWebDl(exactBridges);
+        const fourK = filterWebDl(activeBridges.filter(is4K).sort((a, b) => b.sizeMB - a.sizeMB));
+        const tenEighty = filterWebDl(activeBridges.filter(is1080p).sort((a, b) => b.sizeMB - a.sizeMB));
+        const sevenTwenty = filterWebDl(activeBridges.filter(is720p).sort((a, b) => b.sizeMB - a.sizeMB));
+        const fourEighty = filterWebDl(activeBridges.filter(is480p).sort((a, b) => b.sizeMB - a.sizeMB));
 
         const resolvePromises = [];
         const liveCandidates = [];
 
-        // Concurrently resolve 1080p, 4K, and 720p
+        // Concurrently resolve all 4 qualities (1080p, 4K, 720p, 480p)
         if (tenEighty.length > 0) {
           resolvePromises.push(
             (async () => {
@@ -2280,6 +2415,30 @@ var FourKHDHubClient = class {
           );
         }
 
+        if (fourEighty.length > 0) {
+          resolvePromises.push(
+            (async () => {
+              for (const b of fourEighty.slice(0, 2)) {
+                try {
+                  const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "480p");
+                  const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "480p");
+                  if (live && live.url) {
+                    qualities[live.q] = live.url;
+                    liveCandidates.push({
+                      q: live.q,
+                      url: live.url,
+                      server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
+                      priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                      supports206: live.item?.supports206 ?? true
+                    });
+                    if (live.q === '480p') break;
+                  }
+                } catch (e) {}
+              }
+            })()
+          );
+        }
+
         await Promise.allSettled(resolvePromises);
 
         if (liveCandidates.length === 0) {
@@ -2330,7 +2489,7 @@ var FourKHDHubClient = class {
         const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
         if (bestCandidate) {
           const primaryUrl = bestCandidate.url;
-          const chosenQuality = bestCandidate.q === '4k' ? '4K' : (bestCandidate.q === '1080p' ? '1080p' : (bestCandidate.q === '720p' ? '720p' : '1080p'));
+          const chosenQuality = bestCandidate.q === '4k' ? '4K' : (bestCandidate.q === '1080p' ? '1080p' : (bestCandidate.q === '720p' ? '720p' : (bestCandidate.q === '480p' ? '480p' : '1080p')));
           return {
             title: `${title} - Season ${targetSeason} Episode ${targetEp}`,
             seasonNumber: targetSeason,
@@ -2348,8 +2507,20 @@ var FourKHDHubClient = class {
     }
 
     // Movie stream resolution
-    const targetMovieBridges = movieBridges.length > 0 ? movieBridges : Array.from(episodeMap.values()).flat();
-    if (targetMovieBridges.length > 0) {
+    const rawMovieBridges = movieBridges.length > 0 ? movieBridges : Array.from(episodeMap.values()).flat();
+    if (rawMovieBridges.length > 0) {
+      // Strict Server 1 & Server 2 rule: If both WEB-DL and WEBRip are available, consider ONLY WEB-DL
+      const filterWebDl = (bList) => {
+        const isDl = (b) => /\bweb[-._]?dl\b/i.test(((b.label || '') + ' ' + (b.url || '')).toLowerCase());
+        const isRip = (b) => /\b(?:web[-._]?rip|webrip)\b/i.test(((b.label || '') + ' ' + (b.url || '')).toLowerCase());
+        if (bList.some(isDl) && bList.some(isRip)) {
+          return bList.filter(b => !isRip(b));
+        }
+        return bList;
+      };
+
+      const targetMovieBridges = filterWebDl(rawMovieBridges);
+
       const is4K = (b) => {
         const q = (b.quality || '').toLowerCase();
         if (q === '4k' || q === '2160p' || q === 'uhd') return true;
@@ -2376,6 +2547,15 @@ var FourKHDHubClient = class {
         return /\b(720p?|720)\b|\bhd\b(?!\s*hub|\s*stream|\s*r)/i.test(cleanText) ||
                /\b(720p?|720)\b|\bhd\b(?!\s*hub|\s*stream|\s*r)/i.test(cleanUrl);
       };
+      const is480p = (b) => {
+        if (is4K(b) || is1080p(b) || is720p(b)) return false;
+        const q = (b.quality || '').toLowerCase();
+        if (q === '480p' || q === '480' || q === 'sd') return true;
+        const cleanText = (b.label || '').replace(/4khdhub\.[a-z0-9]+/gi, '').replace(/hdhub4u\.[a-z0-9]+/gi, '').replace(/4khdhub|hdhub4u/gi, '');
+        const cleanUrl = (b.url || '').replace(/4khdhub\.[a-z0-9]+/gi, '').replace(/hdhub4u\.[a-z0-9]+/gi, '').replace(/4khdhub|hdhub4u/gi, '');
+        return /\b(480p?|480|sd)\b/i.test(cleanText) ||
+               /\b(480p?|480|sd)\b/i.test(cleanUrl);
+      };
 
       const rankScore = (b) => {
         let score = (b.sizeMB || 0);
@@ -2386,14 +2566,15 @@ var FourKHDHubClient = class {
         return score;
       };
 
-      const fourK = targetMovieBridges.filter(is4K).sort((a, b) => rankScore(b) - rankScore(a));
-      const tenEighty = targetMovieBridges.filter(is1080p).sort((a, b) => rankScore(b) - rankScore(a));
-      const sevenTwenty = targetMovieBridges.filter(is720p).sort((a, b) => rankScore(b) - rankScore(a));
+      const fourK = filterWebDl(targetMovieBridges.filter(is4K).sort((a, b) => rankScore(b) - rankScore(a)));
+      const tenEighty = filterWebDl(targetMovieBridges.filter(is1080p).sort((a, b) => rankScore(b) - rankScore(a)));
+      const sevenTwenty = filterWebDl(targetMovieBridges.filter(is720p).sort((a, b) => rankScore(b) - rankScore(a)));
+      const fourEighty = filterWebDl(targetMovieBridges.filter(is480p).sort((a, b) => rankScore(b) - rankScore(a)));
 
       const resolvePromises = [];
       const liveCandidates = [];
 
-      // Concurrently resolve 1080p, 4K, and 720p (Prioritizing Multi-Audio High GB links in parallel)
+      // Concurrently resolve all 4 qualities (1080p, 4K, 720p, 480p)
       if (tenEighty.length > 0) {
         resolvePromises.push(
           (async () => {
@@ -2468,6 +2649,31 @@ var FourKHDHubClient = class {
         );
       }
 
+      if (fourEighty.length > 0) {
+        resolvePromises.push(
+          (async () => {
+            const topBridges = fourEighty.slice(0, 3);
+            for (const b of topBridges) {
+              try {
+                const res = await ClientUtils.resolveDeepHubCloudChain(b.url, "480p");
+                const live = await ClientUtils.selectFirstLiveStream(res, defaultHeaders, "480p");
+                if (live && live.url) {
+                  qualities[live.q] = live.url;
+                  liveCandidates.push({
+                    q: live.q,
+                    url: live.url,
+                    server: live.item?.server || getHubServerLabel(live.url, live.q, 'Server 2 (4KHDHub)'),
+                    priority: live.item?.priority ?? ClientUtils.getStreamPriority(live.url, live.item?.server),
+                    supports206: live.item?.supports206 ?? true
+                  });
+                  if (live.q === '480p') break;
+                }
+              } catch (e) {}
+            }
+          })()
+        );
+      }
+
       await Promise.allSettled(resolvePromises);
 
       if (liveCandidates.length === 0) {
@@ -2518,7 +2724,7 @@ var FourKHDHubClient = class {
       const bestCandidate = ClientUtils.selectBestStreamCandidate(liveCandidates);
       if (bestCandidate) {
         const primaryUrl = bestCandidate.url;
-        const chosenQuality = bestCandidate.q === '4k' ? '4K' : (bestCandidate.q === '1080p' ? '1080p' : (bestCandidate.q === '720p' ? '720p' : '1080p'));
+        const chosenQuality = bestCandidate.q === '4k' ? '4K' : (bestCandidate.q === '1080p' ? '1080p' : (bestCandidate.q === '720p' ? '720p' : (bestCandidate.q === '480p' ? '480p' : '1080p')));
         return {
           title,
           streamUrl: primaryUrl,
