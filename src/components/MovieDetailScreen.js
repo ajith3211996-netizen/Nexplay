@@ -2410,7 +2410,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                     marginRight: scale(10)
                   }}
                 >
-                  <Ionicons name="close" size={topIconSize + 2} color="#ffffff" />
+                  <Ionicons name="arrow-back" size={topIconSize} color="#ffffff" />
                 </TouchableOpacity>
 
                 <View style={{ flex: 1, justifyContent: 'center' }}>
@@ -2418,7 +2418,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                     style={{ 
                       color: '#ffffff', 
                       fontWeight: '800', 
-                      fontSize: isFullscreenMode ? moderateScale(16) : moderateScale(13.5),
+                      fontSize: isFullscreenMode ? moderateScale(19) : moderateScale(13),
                       textShadowColor: 'rgba(0,0,0,0.85)',
                       textShadowOffset: { width: 0, height: 1 },
                       textShadowRadius: 3
@@ -2429,10 +2429,10 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                   </Text>
                   <Text 
                     style={{ 
-                      color: isFullscreenMode ? '#38bdf8' : '#cbd5e1', 
-                      fontSize: isFullscreenMode ? moderateScale(12) : moderateScale(10.5), 
-                      fontWeight: isFullscreenMode ? '600' : '500',
-                      marginTop: 1,
+                      color: isFullscreenMode ? '#38bdf8' : '#94a3b8', 
+                      fontSize: isFullscreenMode ? moderateScale(14) : moderateScale(9.8), 
+                      fontWeight: isFullscreenMode ? '700' : '500',
+                      marginTop: isFullscreenMode ? 2 : 1,
                       textShadowColor: 'rgba(0,0,0,0.85)',
                       textShadowOffset: { width: 0, height: 1 },
                       textShadowRadius: 2

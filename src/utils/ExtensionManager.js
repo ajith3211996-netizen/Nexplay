@@ -134,7 +134,7 @@ class ExtensionManagerService {
     }
 
     const uniqueQueries = Array.from(new Set(candidateQueries));
-    const allMatches = [];
+    let allMatches = [];
     const seenUrls = new Set();
 
     for (const query of uniqueQueries) {
