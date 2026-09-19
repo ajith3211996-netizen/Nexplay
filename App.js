@@ -192,6 +192,25 @@ export default function App() {
     setSelectedCategory(category);
   }, []);
 
+  // Play Downloaded Media Offline Handler
+  const handlePlayOffline = useCallback((downloadItem) => {
+    if (!downloadItem) return;
+    setSelectedMovie({
+      id: downloadItem.mediaId || downloadItem.id,
+      title: downloadItem.title,
+      name: downloadItem.title,
+      overview: downloadItem.subtitle || 'Downloaded offline video media',
+      poster_path: downloadItem.poster,
+      backdrop_path: downloadItem.poster,
+      media_type: downloadItem.mediaType || 'movie',
+      isOffline: true,
+      localFileUri: downloadItem.fileUri,
+      quality: downloadItem.quality,
+      seasonNumber: downloadItem.seasonNumber,
+      episodeNumber: downloadItem.episodeNumber
+    });
+  }, []);
+
   // Backward Navigation Handler (Movie B -> Movie A -> Category -> Screen / Tab -> Home -> Exit)
   const handleBack = useCallback(() => {
     // 1. If inside nested movie/series details (Movie B -> Movie A)
@@ -496,7 +515,7 @@ export default function App() {
 
             {/* 5. ACCOUNT TAB */}
             {activeTab === 'Account' && (
-              <AccountScreen />
+              <AccountScreen onPlayOffline={handlePlayOffline} />
             )}
 
             {/* Floating Glassmorphic Bottom Navigation Bar */}
