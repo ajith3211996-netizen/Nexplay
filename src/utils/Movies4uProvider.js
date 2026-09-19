@@ -518,14 +518,15 @@ export class Movies4uClient {
                         for (const primary of resolved) {
                             const check = await this.verifyMediaStream(primary.url, primary.headers);
                             if (check.isLive) {
-                                const qKey = (primary.quality || qHint || '').toLowerCase().includes('4k') || (primary.quality || qHint || '').includes('2160') 
+                                const qLower = (primary.quality || qHint || '').toLowerCase();
+                                const qKey = qLower.includes('4k') || qLower.includes('2160') 
                                     ? '4k' 
-                                    : ((primary.quality || qHint || '').includes('720') ? '720p' : '1080p');
+                                    : (qLower.includes('1080') ? '1080p' : (qLower.includes('720') ? '720p' : (qLower.includes('480') || qLower.includes('490') || qLower.includes('sd') ? '480p' : '1080p')));
                                 if (!qualities[qKey]) {
                                     qualities[qKey] = primary.url;
                                 }
                                 liveCandidates.push({
-                                    quality: qKey === '4k' ? '4K' : (qKey === '1080p' ? '1080p' : '720p'),
+                                    quality: qKey === '4k' ? '4K' : (qKey === '1080p' ? '1080p' : (qKey === '720p' ? '720p' : '480p')),
                                     url: primary.url,
                                     headers: primary.headers || primaryHeaders,
                                     mimeType: primary.mimeType || primaryMime,
@@ -580,12 +581,15 @@ export class Movies4uClient {
                                     for (const candidateStream of resolved) {
                                         const check = await this.verifyMediaStream(candidateStream.url, candidateStream.headers);
                                         if (check.isLive) {
-                                            const qKey = (bridge.quality || '').toLowerCase().includes('4k') || (bridge.quality || '').includes('2160') ? '4k' : ((bridge.quality || '').includes('1080') ? '1080p' : ((bridge.quality || '').includes('720') ? '720p' : '1080p'));
+                                            const qLower = (bridge.quality || '').toLowerCase();
+                                            const qKey = qLower.includes('4k') || qLower.includes('2160') 
+                                                ? '4k' 
+                                                : (qLower.includes('1080') ? '1080p' : (qLower.includes('720') ? '720p' : (qLower.includes('480') || qLower.includes('490') || qLower.includes('sd') ? '480p' : '1080p')));
                                             if (!qualities[qKey]) {
                                                 qualities[qKey] = candidateStream.url;
                                             }
                                             liveCandidates.push({
-                                                quality: qKey === '4k' ? '4K' : (qKey === '1080p' ? '1080p' : qKey),
+                                                quality: qKey === '4k' ? '4K' : (qKey === '1080p' ? '1080p' : (qKey === '720p' ? '720p' : '480p')),
                                                 url: candidateStream.url,
                                                 headers: candidateStream.headers || { 'User-Agent': DEFAULT_USER_AGENT },
                                                 mimeType: candidateStream.mimeType || 'video/x-matroska',

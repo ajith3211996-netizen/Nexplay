@@ -1188,16 +1188,6 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       setAvailableAudioTracks([]);
       setAvailableSubtitleTracks([]);
 
-      // 2. Safely halt decoder and flush previous surface buffers
-      try {
-        player.pause();
-        player.replace(null);
-      } catch (e) {}
-
-      // 3. Allow native Looper 80ms to cleanly release previous hardware MediaCodec instance
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      if (!isMounted.current || !player) return;
-
       const safeStreamUrl = streamUrl.trim();
       const isHls = safeStreamUrl.toLowerCase().includes('.m3u8');
       const isDirectCdn = safeStreamUrl.includes('pixeldrain') || 
@@ -1252,13 +1242,6 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           try {
             player.currentTime = previousTime;
           } catch (tErr) {}
-          setTimeout(() => {
-            if (isMounted.current && player) {
-              try {
-                player.currentTime = previousTime;
-              } catch (e) {}
-            }
-          }, 150);
         }
 
         player.play();
@@ -1347,15 +1330,16 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     closePlayerMenu();
   };
 
-  // Switch between Auto (ABR), 1080p, 4K, 720p
+  // Switch between Auto (ABR), 4K, 1080p, 720p, 480p
   const toggleQuality = (quality) => {
     const qKey = quality.toLowerCase();
 
     if (qKey === 'auto' || qKey === 'abr') {
       setQualityMode('auto');
       showAbrToast('⚡ Auto (ABR) Activated: Dynamic stream adaptation');
-      if (resolvedQualities && resolvedQualities['1080p']) {
-        playResolvedLink(resolvedQualities['1080p'], '1080p', false);
+      const preferred = resolvedQualities?.['1080p'] || resolvedQualities?.['4k'] || resolvedQualities?.['720p'] || resolvedQualities?.['480p'] || Object.values(resolvedQualities || {})[0];
+      if (preferred) {
+        playResolvedLink(preferred, '1080p', false);
       }
       return;
     }
@@ -1363,7 +1347,18 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     setQualityMode(qKey);
     let targetUrl = null;
     if (resolvedQualities && typeof resolvedQualities === 'object') {
-      targetUrl = resolvedQualities[qKey] || resolvedQualities[quality];
+      if (qKey === '4k' || qKey === '2160p') {
+        targetUrl = resolvedQualities['4k'] || resolvedQualities['2160p'] || resolvedQualities['2160'];
+      } else if (qKey === '1080p' || qKey === '1080') {
+        targetUrl = resolvedQualities['1080p'] || resolvedQualities['1080'];
+      } else if (qKey === '720p' || qKey === '720') {
+        targetUrl = resolvedQualities['720p'] || resolvedQualities['720'];
+      } else if (qKey === '480p' || qKey === '480' || qKey === '490p' || qKey === '490') {
+        targetUrl = resolvedQualities['480p'] || resolvedQualities['480'] || resolvedQualities['490p'];
+      } else {
+        targetUrl = resolvedQualities[qKey] || resolvedQualities[quality];
+      }
+
       if (!targetUrl) {
         const keys = Object.keys(resolvedQualities);
         const match = keys.find(k => k.toLowerCase().includes(qKey) || qKey.includes(k.toLowerCase()));
@@ -1376,9 +1371,11 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     }
 
     if (targetUrl) {
+      showAbrToast(`⚡ Switched to ${qKey.toUpperCase()} Stream`);
       playResolvedLink(targetUrl, qKey, true);
     } else {
-      console.warn(`[MovieDetailScreen] Quality ${quality} is not in waiting list:`, resolvedQualities);
+      console.warn(`[MovieDetailScreen] Quality ${quality} is not available:`, resolvedQualities);
+      showAbrToast(`⚠️ ${qKey.toUpperCase()} is not available for this release`);
     }
   };
 
@@ -2398,7 +2395,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           >
             {/* Top Row: Back/Close & Title on left; Season, Episode, and Server Switcher on right */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: scale(8) }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: scale(10) }}>
                 <TouchableOpacity 
                   onPress={isFullscreenMode ? toggleFullscreen : onBack}
                   style={{ 
@@ -2410,24 +2407,45 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                     justifyContent: 'center', 
                     borderWidth: 1, 
                     borderColor: 'rgba(255,255,255,0.15)',
-                    marginRight: !isPortrait ? scale(10) : 0
+                    marginRight: scale(10)
                   }}
                 >
-                  <Ionicons name={isFullscreenMode ? "close" : "chevron-back"} size={topIconSize} color="#ffffff" />
+                  <Ionicons name="close" size={topIconSize + 2} color="#ffffff" />
                 </TouchableOpacity>
 
-                {isFullscreenMode && (
-                  <View style={{ flex: 1, marginLeft: scale(6) }}>
-                    <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: moderateScale(13) }} numberOfLines={1}>
-                      {details.title || details.name || movie.title || movie.name}
-                    </Text>
-                    {isTVShow && currentEpisode && (
-                      <Text style={{ color: '#a1a1aa', fontSize: moderateScale(11), fontWeight: '500' }} numberOfLines={1}>
-                        {currentEpisode.title || `Season ${selectedSeason} • Episode ${currentEpisode.episodeNumber || 1}`}
-                      </Text>
-                    )}
-                  </View>
-                )}
+                <View style={{ flex: 1, justifyContent: 'center' }}>
+                  <Text 
+                    style={{ 
+                      color: '#ffffff', 
+                      fontWeight: '800', 
+                      fontSize: isFullscreenMode ? moderateScale(16) : moderateScale(13.5),
+                      textShadowColor: 'rgba(0,0,0,0.85)',
+                      textShadowOffset: { width: 0, height: 1 },
+                      textShadowRadius: 3
+                    }} 
+                    numberOfLines={1}
+                  >
+                    {details.title || details.name || movie.title || movie.name}
+                  </Text>
+                  <Text 
+                    style={{ 
+                      color: isFullscreenMode ? '#38bdf8' : '#cbd5e1', 
+                      fontSize: isFullscreenMode ? moderateScale(12) : moderateScale(10.5), 
+                      fontWeight: isFullscreenMode ? '600' : '500',
+                      marginTop: 1,
+                      textShadowColor: 'rgba(0,0,0,0.85)',
+                      textShadowOffset: { width: 0, height: 1 },
+                      textShadowRadius: 2
+                    }} 
+                    numberOfLines={1}
+                  >
+                    {isTVShow 
+                      ? (currentEpisode?.title && !currentEpisode.title.toLowerCase().startsWith('episode')
+                          ? `S${currentEpisode.seasonNumber || selectedSeason || 1} • E${currentEpisode.episodeNumber || 1} - ${currentEpisode.title}`
+                          : `Season ${currentEpisode?.seasonNumber || selectedSeason || 1} • Episode ${currentEpisode?.episodeNumber || 1}`)
+                      : [releaseYear, runtimeDisplay].filter(Boolean).join(' • ')}
+                  </Text>
+                </View>
               </View>
 
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexShrink: 0, gap: scale(6) }}>
@@ -3178,41 +3196,50 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                       id: 'auto',
                       label: 'Auto (Adaptive Bitrate)',
                       desc: qualityMode === 'auto'
-                        ? `Active • Dynamically adapts to bandwidth (${currentQuality.toUpperCase()})`
+                        ? `Active • Dynamically adapts (${currentQuality.toUpperCase()})`
                         : 'Automatically optimizes bitrate & resolution to prevent buffering'
                     });
 
-                    if (resolvedQualities && typeof resolvedQualities === 'object') {
-                      if (resolvedQualities['1080p']) {
-                        const isNowPlaying = currentQuality.toLowerCase() === '1080p' && qualityMode !== 'auto';
-                        options.push({ 
-                          id: '1080p', 
-                          label: 'Full HD (1080p)', 
-                          desc: isNowPlaying ? 'Currently Playing (Locked)' : 'Lock 1080p Quality' 
-                        });
-                      }
-                      if (resolvedQualities['4k']) {
-                        const isNowPlaying = currentQuality.toLowerCase() === '4k' && qualityMode !== 'auto';
-                        options.push({ 
-                          id: '4k', 
-                          label: '4K Ultra HD (2160p)', 
-                          desc: isNowPlaying ? 'Currently Playing (Locked)' : 'Lock 4K UHD Quality' 
-                        });
-                      }
-                      if (resolvedQualities['720p']) {
-                        const isNowPlaying = currentQuality.toLowerCase() === '720p' && qualityMode !== 'auto';
-                        options.push({ 
-                          id: '720p', 
-                          label: 'HD (720p)', 
-                          desc: isNowPlaying ? 'Currently Playing (Locked)' : 'Lock 720p Data Saver' 
+                    const qMap = (resolvedQualities && typeof resolvedQualities === 'object') ? resolvedQualities : {};
+                    const standardKeys = [
+                      { key: '4k', label: '4K Ultra HD (2160p)', desc: 'Ultra High Definition Master Stream' },
+                      { key: '1080p', label: 'Full HD (1080p)', desc: 'Crisp High-Speed Master Stream' },
+                      { key: '720p', label: 'HD (720p)', desc: 'Balanced Quality & Speed' },
+                      { key: '480p', label: 'SD (480p)', desc: 'Fast Data Saver Stream' }
+                    ];
+
+                    for (const std of standardKeys) {
+                      const hasUrl = qMap[std.key] || qMap[std.key.replace('p', '')] || (std.key === '4k' && (qMap['2160p'] || qMap['2160']));
+                      if (hasUrl) {
+                        const isNowPlaying = (currentQuality.toLowerCase() === std.key || (std.key === '4k' && currentQuality.toLowerCase() === '2160p')) && qualityMode !== 'auto';
+                        options.push({
+                          id: std.key,
+                          label: std.label,
+                          desc: isNowPlaying ? 'Currently Playing (Locked)' : std.desc
                         });
                       }
                     }
-                    if (options.length === 1) {
-                      options.push(
-                        { id: '1080p', label: 'Full HD (1080p)', desc: 'Direct 1080p Stream' },
-                        { id: '4k', label: '4K Ultra HD (2160p)', desc: 'Direct 4K Stream' }
-                      );
+
+                    // Any extra non-standard quality keys in resolvedQualities
+                    Object.keys(qMap).forEach(k => {
+                      const lowerK = k.toLowerCase();
+                      if (!['4k', '2160p', '2160', '1080p', '1080', '720p', '720', '480p', '480', 'auto'].includes(lowerK)) {
+                        const isNowPlaying = currentQuality.toLowerCase() === lowerK && qualityMode !== 'auto';
+                        options.push({
+                          id: k,
+                          label: `${k.toUpperCase()} Quality`,
+                          desc: isNowPlaying ? 'Currently Playing (Locked)' : 'Direct Stream'
+                        });
+                      }
+                    });
+
+                    // If only 1 quality was scraped from the post, display all standard options
+                    if (options.length === 1 && currentEpisode?.videoUrl) {
+                      options.push({
+                        id: currentQuality || '1080p',
+                        label: `${(currentQuality || '1080p').toUpperCase()} Stream`,
+                        desc: 'Currently Playing'
+                      });
                     }
                     return options;
                   })().map((q) => {

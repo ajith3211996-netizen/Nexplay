@@ -502,6 +502,9 @@ var ClientUtils = class {
     if (/\b(720p|720|\bhd\b)\b/i.test(cleanTarget)) {
       return "720p";
     }
+    if (/\b(480p|480|490p|490|sd)\b/i.test(cleanTarget)) {
+      return "480p";
+    }
     return fallbackHint.toLowerCase();
   }
 
