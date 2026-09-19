@@ -608,6 +608,12 @@ var ClientUtils = class {
   static selectBestStreamCandidate(candidateStreams) {
     if (!Array.isArray(candidateStreams) || candidateStreams.length === 0) return null;
     const sorted = [...candidateStreams].sort((a, b) => {
+      // 1. Strict Priority: Streams that support HTTP 206 Partial Content / HLS seeking rank ahead of non-seekable streams
+      const a206 = a.supports206 ?? (a.url?.includes('.m3u8') || (!a.url?.includes('googleusercontent.com') && !a.url?.includes('video-downloads')));
+      const b206 = b.supports206 ?? (b.url?.includes('.m3u8') || (!b.url?.includes('googleusercontent.com') && !b.url?.includes('video-downloads')));
+      if (a206 && !b206) return -1;
+      if (!a206 && b206) return 1;
+
       const prioA = a.priority ?? this.getStreamPriority(a.url, a.server);
       const prioB = b.priority ?? this.getStreamPriority(b.url, b.server);
       if (prioA !== prioB) {
@@ -620,14 +626,15 @@ var ClientUtils = class {
   }
 
   /**
-   * Pre-flight video stream health check (verifies HTTP 200/206 streaming availability)
+   * Pre-flight video stream health check (verifies HTTP 206 Partial Content and 200 streaming availability)
    */
   static async verifyMediaStream(streamUrl, headers = {}, timeoutMs = 3500) {
-    if (!streamUrl || !streamUrl.startsWith("http")) return false;
+    if (!streamUrl || !streamUrl.startsWith("http")) return { isLive: false, supports206: false };
     let controller = null;
     let timeoutId = null;
     try {
       const safeUrl = this.sanitizeStreamUrl(streamUrl);
+      const isHls = safeUrl.toLowerCase().includes('.m3u8');
       if (typeof AbortController !== "undefined") {
         controller = new AbortController();
         timeoutId = setTimeout(() => {
@@ -649,18 +656,22 @@ var ClientUtils = class {
       });
 
       const status = res.status;
+      const acceptRanges = (res.headers.get("accept-ranges") || "").toLowerCase();
+      const contentRange = res.headers.get("content-range");
       const contentType = (res.headers.get("content-type") || "").toLowerCase();
+
       if (contentType.includes("zip") || contentType.includes("html") || contentType.includes("json")) {
-        return false;
+        return { isLive: false, supports206: false };
       }
       if (safeUrl.includes("testzip.php") || safeUrl.includes("negn6f")) {
-        return false;
+        return { isLive: false, supports206: false };
       }
       // HTTP 200 (OK), 206 (Partial Content), 302/301 are active stream responses
-      const isValid = (status >= 200 && status < 400);
-      return isValid;
+      const isLive = (status >= 200 && status < 400);
+      const supports206 = isHls || status === 206 || Boolean(contentRange) || (status === 200 && acceptRanges.includes("bytes"));
+      return { isLive, supports206, status, contentType };
     } catch {
-      return false;
+      return { isLive: false, supports206: false };
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
       try { if (controller) controller.abort(); } catch (_) {}
@@ -671,14 +682,26 @@ var ClientUtils = class {
     if (!Array.isArray(candidateList) || candidateList.length === 0) return null;
     const sorted = [...candidateList].sort((a, b) => (a.priority || 50) - (b.priority || 50));
     
-    // Pass 1: Try live non-Google CDN streams (FSL, FSLv2, Pixeldrain, Watch Online - priority < 90)
+    // Pass 1: Try live non-Google CDN streams that strictly support HTTP 206 Partial Content (FSL, FSLv2, Pixeldrain, Watch Online)
     for (const item of sorted) {
       if (item && item.url && (item.priority || 50) < 90) {
         const streamHeaders = item.headers || headers;
-        const isLive = await this.verifyMediaStream(item.url, streamHeaders, 3500);
-        if (isLive) {
+        const check = await this.verifyMediaStream(item.url, streamHeaders, 3500);
+        if (check.isLive && check.supports206) {
           const detectedQ = this.detectQualityFromUrl(item.url, fallbackQuality);
-          return { q: detectedQ, url: item.url, item };
+          return { q: detectedQ, url: item.url, item: { ...item, supports206: true } };
+        }
+      }
+    }
+
+    // Pass 2: Any non-Google CDN stream that is live
+    for (const item of sorted) {
+      if (item && item.url && (item.priority || 50) < 90) {
+        const streamHeaders = item.headers || headers;
+        const check = await this.verifyMediaStream(item.url, streamHeaders, 3500);
+        if (check.isLive) {
+          const detectedQ = this.detectQualityFromUrl(item.url, fallbackQuality);
+          return { q: detectedQ, url: item.url, item: { ...item, supports206: check.supports206 } };
         }
       }
     }
@@ -690,14 +713,14 @@ var ClientUtils = class {
       return { q: this.detectQualityFromUrl(chosen.url, fallbackQuality), url: chosen.url, item: chosen };
     }
 
-    // Pass 2: Only test and return Google CDN (priority >= 90) if no other stream exists across providers
+    // Pass 3: Only test and return Google CDN (priority >= 90) if no other stream exists across providers
     for (const item of sorted) {
       if (item && item.url) {
         const streamHeaders = item.headers || headers;
-        const isLive = await this.verifyMediaStream(item.url, streamHeaders, 3500);
-        if (isLive) {
+        const check = await this.verifyMediaStream(item.url, streamHeaders, 3500);
+        if (check.isLive) {
           const detectedQ = this.detectQualityFromUrl(item.url, fallbackQuality);
-          return { q: detectedQ, url: item.url, item };
+          return { q: detectedQ, url: item.url, item: { ...item, supports206: check.supports206 } };
         }
       }
     }

@@ -709,6 +709,12 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       maxBufferBytes: 0, // 0 = C.LENGTH_UNSET in Android Media3 ExoPlayer: unconstrained bandwidth consumption (1 to 40+ Mbps)
       prioritizeTimeOverSizeThreshold: true,
     };
+    try {
+      playerInstance.seekTolerance = {
+        toleranceBefore: 0.5,
+        toleranceAfter: 0.5,
+      };
+    } catch (e) {}
   });
 
   // Dynamically listen to timeUpdate events from Media3 ExoPlayer
@@ -1007,11 +1013,61 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
       setResolvedQualities(qualities);
 
-      const initialQuality = (qualities['1080p'] ? '1080p' : (qualities['4k'] ? '4k' : (qualities['720p'] ? '720p' : Object.keys(qualities)[0])));
-      const initialStreamLink = qualities[initialQuality] || streamUrl;
+      let initialQuality = (qualities['1080p'] ? '1080p' : (qualities['4k'] ? '4k' : (qualities['720p'] ? '720p' : Object.keys(qualities)[0])));
+      let initialStreamLink = qualities[initialQuality] || streamUrl;
+
+      // Strictly verify HTTP 206 Partial Content (Range seeking) support before playing!
+      // If the chosen link is non-seekable (e.g. Google CDN returning 200), search alternative qualities for a 206 stream
+      try {
+        const check206Support = async (url) => {
+          if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
+          if (url.toLowerCase().includes('.m3u8')) return true; // HLS is chunk-indexed and natively seekable
+          if (url.includes('googleusercontent.com') || url.includes('video-downloads')) return false; // Google CDN rejects 206
+          try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => { try { controller.abort(); } catch (_) {} }, 2500);
+            const isDirectCdn = url.includes('pixeldrain') || url.includes('cloudflarestorage.com') || url.includes('fastdl') || url.includes('bunker.monster');
+            const defaultRef = playable?.headers?.Referer || (!isDirectCdn ? 'https://gamerxyt.com/' : undefined);
+            const res = await fetch(url.trim(), {
+              method: 'GET',
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Range': 'bytes=0-1024',
+                ...(defaultRef ? { 'Referer': defaultRef } : {})
+              },
+              signal: controller.signal,
+              redirect: 'follow'
+            });
+            clearTimeout(timer);
+            const status = res.status;
+            const acceptRanges = (res.headers.get('accept-ranges') || '').toLowerCase();
+            const contentRange = res.headers.get('content-range');
+            return status === 206 || Boolean(contentRange) || (status === 200 && acceptRanges.includes('bytes'));
+          } catch {
+            return false;
+          }
+        };
+
+        const isSeekable = await check206Support(initialStreamLink);
+        if (!isSeekable) {
+          console.log(`[MovieDetailScreen] Initial link (${initialStreamLink.substring(0, 50)}...) does not support 206 Partial Content. Checking alternative qualities for seekable stream...`);
+          for (const [qKey, qUrl] of Object.entries(qualities)) {
+            if (qUrl && qUrl !== initialStreamLink) {
+              const altSeekable = await check206Support(qUrl);
+              if (altSeekable) {
+                console.log(`[MovieDetailScreen] ⚡ Found 206 Partial Content seekable stream on ${qKey}: ${qUrl.substring(0, 60)}...`);
+                initialStreamLink = qUrl;
+                initialQuality = qKey;
+                break;
+              }
+            }
+          }
+        }
+      } catch (err206) {}
+
       setCurrentQuality(initialQuality);
       console.log(`[MovieDetailScreen] ✅ Extracted available streams:`, qualities);
-      console.log(`[MovieDetailScreen] ▶️ Playing initial stream (${initialQuality}): ${initialStreamLink}`);
+      console.log(`[MovieDetailScreen] ▶️ Playing verified stream (${initialQuality}): ${initialStreamLink}`);
 
       setIsResolving(false);
       isResolvingRef.current = false;
@@ -1162,6 +1218,13 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
             prioritizeTimeOverSizeThreshold: true,
           };
         } catch (bErr) {}
+
+        try {
+          player.seekTolerance = {
+            toleranceBefore: 0.5,
+            toleranceAfter: 0.5,
+          };
+        } catch (sErr) {}
 
         try {
           player.playbackRate = playbackSpeed || 1.0;
@@ -1503,6 +1566,9 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         currentTimeRef.current = target;
         setCurrentTime(target);
         player.currentTime = target;
+        if (typeof player.seekBy === 'function') {
+          try { player.seekBy(10); } catch (_) {}
+        }
       } catch (e) {
         console.warn('[MovieDetailScreen] skipForward error:', e);
       }
@@ -1527,6 +1593,9 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         currentTimeRef.current = target;
         setCurrentTime(target);
         player.currentTime = target;
+        if (typeof player.seekBy === 'function') {
+          try { player.seekBy(-10); } catch (_) {}
+        }
       } catch (e) {
         console.warn('[MovieDetailScreen] skipBackward error:', e);
       }
@@ -1661,13 +1730,13 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         const timeDiff = now - lastTapRef.current.time;
         const distDiff = Math.abs(locationX - lastTapRef.current.x);
 
-        if (timeDiff < 380 && distDiff < 100) {
-          // Double Tap!
+        if (timeDiff < 450 && distDiff < 120) {
+          // Double Tap strictly recognized!
           lastTapRef.current = { time: now, x: locationX };
-          if (locationX < currentW * 0.42) {
+          if (locationX < currentW * 0.45) {
             skipBackward();
             showDoubleTapFeedback('left');
-          } else if (locationX > currentW * 0.58) {
+          } else if (locationX > currentW * 0.55) {
             skipForward();
             showDoubleTapFeedback('right');
           } else {

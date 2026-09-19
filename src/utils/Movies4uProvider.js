@@ -97,6 +97,12 @@ export function getQualityWeight(qStr) {
 export function selectBestStreamCandidate(candidateStreams) {
     if (!Array.isArray(candidateStreams) || candidateStreams.length === 0) return null;
     const sorted = [...candidateStreams].sort((a, b) => {
+        // 1. Strict Priority: Streams supporting HTTP 206 Partial Content rank ahead of non-seekable streams
+        const a206 = a.supports206 ?? (a.url?.includes('.m3u8') || (!a.url?.includes('googleusercontent.com') && !a.url?.includes('video-downloads')));
+        const b206 = b.supports206 ?? (b.url?.includes('.m3u8') || (!b.url?.includes('googleusercontent.com') && !b.url?.includes('video-downloads')));
+        if (a206 && !b206) return -1;
+        if (!a206 && b206) return 1;
+
         const prioA = a.priority ?? getStreamPriority(a.url, a.server);
         const prioB = b.priority ?? getStreamPriority(b.url, b.server);
         if (prioA !== prioB) {
@@ -430,10 +436,11 @@ export class Movies4uClient {
     }
 
     async verifyMediaStream(streamUrl, headers = {}, timeoutMs = 3500) {
-        if (!streamUrl || !streamUrl.startsWith("http")) return false;
+        if (!streamUrl || !streamUrl.startsWith("http")) return { isLive: false, supports206: false };
         let controller = null;
         let timeoutId = null;
         try {
+            const isHls = streamUrl.toLowerCase().includes('.m3u8');
             if (typeof AbortController !== "undefined") {
                 controller = new AbortController();
                 timeoutId = setTimeout(() => {
@@ -452,16 +459,20 @@ export class Movies4uClient {
                 redirect: "follow"
             });
             const status = res.status;
+            const acceptRanges = (res.headers.get("accept-ranges") || "").toLowerCase();
+            const contentRange = res.headers.get("content-range");
             const contentType = (res.headers.get("content-type") || "").toLowerCase();
             if (contentType.includes("zip") || contentType.includes("html") || contentType.includes("json")) {
-                return false;
+                return { isLive: false, supports206: false };
             }
             if (streamUrl.includes("testzip.php") || streamUrl.includes("negn6f")) {
-                return false;
+                return { isLive: false, supports206: false };
             }
-            return (status >= 200 && status < 400);
+            const isLive = (status >= 200 && status < 400);
+            const supports206 = isHls || status === 206 || Boolean(contentRange) || (status === 200 && acceptRanges.includes("bytes"));
+            return { isLive, supports206, status, contentType };
         } catch {
-            return false;
+            return { isLive: false, supports206: false };
         } finally {
             if (timeoutId) clearTimeout(timeoutId);
             try { if (controller) controller.abort(); } catch (_) {}
@@ -505,8 +516,8 @@ export class Movies4uClient {
                     const resolved = await this.resolveStream(candidate.url, qHint, fetcher);
                     if (resolved.length > 0) {
                         for (const primary of resolved) {
-                            const isLive = await this.verifyMediaStream(primary.url, primary.headers);
-                            if (isLive) {
+                            const check = await this.verifyMediaStream(primary.url, primary.headers);
+                            if (check.isLive) {
                                 const qKey = (primary.quality || qHint || '').toLowerCase().includes('4k') || (primary.quality || qHint || '').includes('2160') 
                                     ? '4k' 
                                     : ((primary.quality || qHint || '').includes('720') ? '720p' : '1080p');
@@ -519,7 +530,8 @@ export class Movies4uClient {
                                     headers: primary.headers || primaryHeaders,
                                     mimeType: primary.mimeType || primaryMime,
                                     server: primary.server || (qKey === '4k' ? 'Server 3 (Movies4u 4K Direct)' : 'Server 3 (Movies4u)'),
-                                    priority: primary.priority ?? getStreamPriority(primary.url, primary.server)
+                                    priority: primary.priority ?? getStreamPriority(primary.url, primary.server),
+                                    supports206: check.supports206
                                 });
                             }
                         }
@@ -565,8 +577,8 @@ export class Movies4uClient {
                                 const resolved = await this.resolveStream(l.url, bridge.quality || '1080p', fetcher);
                                 if (resolved.length > 0) {
                                     for (const candidateStream of resolved) {
-                                        const isLive = await this.verifyMediaStream(candidateStream.url, candidateStream.headers);
-                                        if (isLive) {
+                                        const check = await this.verifyMediaStream(candidateStream.url, candidateStream.headers);
+                                        if (check.isLive) {
                                             const qKey = (bridge.quality || '').toLowerCase().includes('4k') || (bridge.quality || '').includes('2160') ? '4k' : ((bridge.quality || '').includes('1080') ? '1080p' : ((bridge.quality || '').includes('720') ? '720p' : '1080p'));
                                             if (!qualities[qKey]) {
                                                 qualities[qKey] = candidateStream.url;
@@ -578,7 +590,7 @@ export class Movies4uClient {
                                                 mimeType: candidateStream.mimeType || 'video/x-matroska',
                                                 server: candidateStream.server || 'Server 3 (Movies4u)',
                                                 priority: candidateStream.priority ?? getStreamPriority(candidateStream.url, candidateStream.server),
-                                                ep
+                                                supports206: check.supports206
                                             });
                                         }
                                     }
