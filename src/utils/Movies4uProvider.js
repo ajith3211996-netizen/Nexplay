@@ -63,26 +63,15 @@ export function getStreamPriority(url, serverLabel = '') {
         return 1;
     }
     // 2. [Download FSL v2 server] (FastDL / Bunker / Valentine / Lenin CDN / Pongala)
-    if (u.includes('fastdl') || u.includes('bunker.monster') || u.includes('valentine.guru') || u.includes('pongala.life') || u.includes('lenin.buzz') || s.includes('fslv2') || s.includes('fsl v2') || s.includes('fastdl')) {
+    if (u.includes('fastdl') || u.includes('bunker.monster') || u.includes('valentine.guru') || u.includes('pongala.life') || u.includes('lenin.buzz') || s.includes('fslv2') || s.includes('fsl v2')) {
         return 2;
     }
     // 3. pixeldrain (PixelDrain Direct CDN Stream)
     if (u.includes('pixeldrain.dev/api/file') || u.includes('pixeldrain.com/api/file') || s.includes('pixel') || s.includes('pixeldrain')) {
         return 3;
     }
-    // 4. Watch online (Direct player / HLS stream)
-    if (u.includes('.m3u8') || s.includes('watch online') || s.includes('hdstream4u') || s.includes('hubstream') || s.includes('m4uplay')) {
-        return 4;
-    }
-    // 5. Cloudflare Workers / HubCDN Direct
-    if (u.includes('workers.dev') || u.includes('hubcdn') || s.includes('worker')) {
-        return 5;
-    }
-    // Strictly reject Google CDN / Server : 10Gbps links
-    if (u.includes('googleusercontent.com') || u.includes('video-downloads') || s.includes('server : 10gbps') || s.includes('server: 10gbps') || s.includes('google cdn') || (s.includes('10gbps') && !s.includes('fsl') && !s.includes('r2'))) {
-        return 999;
-    }
-    return 50;
+    // All other servers (watch online, workers, google cdn) strictly rejected
+    return 999;
 }
 
 export function getQualityWeight(qStr) {
@@ -101,35 +90,38 @@ export function selectBestStreamCandidate(candidateStreams) {
         if (!c || !c.url) return false;
         const u = c.url.toLowerCase();
         const s = (c.server || '').toLowerCase();
+
+        // USER REQUIREMENT: Use ONLY [download fsl server], [download fsl v2 server], and pixeldrain
+        const isFsl = s.includes('fsl server') || u.includes('r2.cloudflarestorage.com') || u.includes('r2.dev');
+        const isFslV2 = s.includes('fslv2') || s.includes('fsl v2') || u.includes('fastdl') || u.includes('bunker.monster') || u.includes('valentine.guru') || u.includes('pongala.life') || u.includes('lenin.buzz');
+        const isPixel = s.includes('pixel') || u.includes('pixeldrain.com') || u.includes('pixeldrain.dev');
+
+        if (!isFsl && !isFslV2 && !isPixel) {
+            return false;
+        }
+
         if (u.includes('googleusercontent.com') || u.includes('video-downloads') || s.includes('server : 10gbps') || s.includes('google cdn')) {
             return false;
         }
-        // Strictly only accept streams confirmed to support HTTP 206 Partial Content (or .m3u8 HLS)
-        // 200 OK links and non-seekable streams are completely ignored per user requirement!
-        return c.supports206 === true || u.includes('.m3u8');
+
+        // Strictly only accept streams confirmed to support HTTP 206 Partial Content
+        return c.supports206 === true;
     });
     if (filtered.length === 0) return null;
     const sorted = [...filtered].sort((a, b) => {
-        // 1. Strict Priority: Streams supporting HTTP 206 Partial Content rank ahead of non-seekable streams
-        const a206 = a.supports206 === true || a.url?.includes('.m3u8');
-        const b206 = b.supports206 === true || b.url?.includes('.m3u8');
-        if (a206 && !b206) return -1;
-        if (!a206 && b206) return 1;
-
-        // 2. Default playback quality preference: 1080p FIRST as default!
         const aIs1080 = (a.quality || a.q || '').toLowerCase().includes('1080');
         const bIs1080 = (b.quality || b.q || '').toLowerCase().includes('1080');
         const prioA = a.priority ?? getStreamPriority(a.url, a.server);
         const prioB = b.priority ?? getStreamPriority(b.url, b.server);
 
-        // When both are high-speed streams (priority <= 5), prefer 1080p for default playback
-        if (prioA <= 5 && prioB <= 5) {
+        // When both are verified high-speed streams (priority <= 3), prefer 1080p for default playback
+        if (prioA <= 3 && prioB <= 3) {
             if (aIs1080 && !bIs1080) return -1;
             if (!aIs1080 && bIs1080) return 1;
         }
 
         if (prioA !== prioB) {
-            return prioA - prioB; // 1 (FSL) < 2 (FSLv2) < 3 (Pixeldrain) < 4 (Watch online) < 5
+            return prioA - prioB; // 1 (FSL) < 2 (FSLv2) < 3 (Pixeldrain)
         }
         return getQualityWeight(b.quality || b.q) - getQualityWeight(a.quality || a.q);
     });
@@ -1103,35 +1095,7 @@ export class Movies4uClient {
                         }
                     }
                 }
-                // 4. Watch Online streaming link - Priority 4
-                else if (lowerHref.includes('hdstream4u') || lowerHref.includes('hubstream') || lowerHref.includes('m4uplay') || lowerLabel.includes('watch online')) {
-                    if (href.startsWith('http') && !lowerHref.includes('winexch') && !lowerHref.includes('snvhost') && !lowerHref.includes('tutorial') && !lowerHref.includes('pages.dev') && !lowerHref.includes('vdplay')) {
-                        results.push({
-                            quality: qualityHint,
-                            url: href,
-                            originalUrl: hubUrl,
-                            server: 'Watch Online (High-Speed Stream)',
-                            type: 'hls',
-                            headers: { 'User-Agent': DEFAULT_USER_AGENT },
-                            mimeType: 'application/x-mpegURL',
-                            priority: 4
-                        });
-                    }
-                }
-                // 5. Cloudflare Worker Stream (.workers.dev)
-                else if (href.includes('workers.dev') && !href.includes('/?id=')) {
-                    const safeWorkerUrl = encodeURI(href);
-                    results.push({
-                        quality: qualityHint,
-                        url: safeWorkerUrl,
-                        originalUrl: hubUrl,
-                        server: 'Download File (Cloudflare Worker Stream)',
-                        type: 'direct',
-                        headers: { 'User-Agent': DEFAULT_USER_AGENT, 'Referer': 'https://gamerxyt.com/' },
-                        mimeType: 'video/x-matroska',
-                        priority: 5
-                    });
-                }
+                /* Non-FSL / non-Pixel servers eliminated per user requirement */
             }
 
             // Check dynamic script var pxl if Pixeldrain not yet added

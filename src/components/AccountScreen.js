@@ -18,8 +18,12 @@ import {
   setDnsConfig, 
   testDnsServer 
 } from '../utils/DnsResolver';
+import DownloadsScreen from './DownloadsScreen';
+import { DownloadManager } from '../utils/DownloadManager';
 
-export default function AccountScreen() {
+export default function AccountScreen({ onPlayOffline }) {
+  const [showDownloadsScreen, setShowDownloadsScreen] = useState(false);
+  const [downloadsSummary, setDownloadsSummary] = useState({ total: 0, active: 0, completed: 0, sizeStr: '0 MB' });
   const [dnsConfig, setDnsConfigState] = useState(getDnsConfig());
   const [customDnsInput, setCustomDnsInput] = useState(dnsConfig.customUrl || 'https://dns.google/resolve');
   const [testingDns, setTestingDns] = useState(false);
@@ -33,6 +37,22 @@ export default function AccountScreen() {
     const current = getDnsConfig();
     setDnsConfigState(current);
     handleTestDns(current.providerId, current.customUrl);
+
+    const unsubDownloads = DownloadManager.subscribe((items) => {
+      const active = items.filter(d => d.status === 'downloading' || d.status === 'paused').length;
+      const completed = items.filter(d => d.status === 'completed').length;
+      const totalBytes = items.filter(d => d.status === 'completed').reduce((acc, c) => acc + (c.totalBytes || 0), 0);
+      setDownloadsSummary({
+        total: items.length,
+        active,
+        completed,
+        sizeStr: DownloadManager.formatBytes(totalBytes)
+      });
+    });
+
+    return () => {
+      if (unsubDownloads) unsubDownloads();
+    };
   }, []);
 
   const handleProviderSelect = (providerId) => {
@@ -82,6 +102,18 @@ export default function AccountScreen() {
     }
   };
 
+  if (showDownloadsScreen) {
+    return (
+      <DownloadsScreen 
+        onBack={() => setShowDownloadsScreen(false)} 
+        onPlayOffline={(item) => {
+          setShowDownloadsScreen(false);
+          if (onPlayOffline) onPlayOffline(item);
+        }}
+      />
+    );
+  }
+
   return (
     <ScrollView 
       style={styles.container}
@@ -108,6 +140,35 @@ export default function AccountScreen() {
           <Text style={styles.userExpiry}>Unlimited Access • High-Speed Scraper</Text>
         </View>
       </View>
+
+      {/* 2. OFFLINE DOWNLOADS & STORAGE CARD */}
+      <TouchableOpacity 
+        style={styles.downloadsCard}
+        activeOpacity={0.8}
+        onPress={() => setShowDownloadsScreen(true)}
+      >
+        <View style={styles.downloadsIconCircle}>
+          <MaterialCommunityIcons name="cloud-download-outline" size={scale(24)} color="#38bdf8" />
+        </View>
+        <View style={styles.downloadsInfo}>
+          <View style={styles.downloadsTitleRow}>
+            <Text style={styles.downloadsTitle}>Offline Downloads</Text>
+            {downloadsSummary.active > 0 && (
+              <View style={styles.activeDownloadingBadge}>
+                <Text style={styles.activeDownloadingBadgeText}>{downloadsSummary.active} Active</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.downloadsSubtitle}>
+            {downloadsSummary.completed > 0 
+              ? `${downloadsSummary.completed} ready offline • ${downloadsSummary.sizeStr} stored`
+              : 'Save movies & episodes directly to your device'}
+          </Text>
+        </View>
+        <View style={styles.downloadsArrow}>
+          <Ionicons name="chevron-forward" size={scale(20)} color="#94a3b8" />
+        </View>
+      </TouchableOpacity>
 
       {/* 2. DNS & NETWORK PRIVACY (ANTI-ISP BLOCKING SECTION) */}
       <View style={styles.sectionCard}>
@@ -496,6 +557,64 @@ const styles = StyleSheet.create({
   userExpiry: {
     color: '#71717a',
     fontSize: moderateScale(11),
+  },
+  downloadsCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#18181b',
+    borderRadius: scale(16),
+    padding: scale(14),
+    marginBottom: verticalScale(16),
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.25)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  downloadsIconCircle: {
+    width: scale(42),
+    height: scale(42),
+    borderRadius: scale(21),
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  downloadsInfo: {
+    flex: 1,
+    marginLeft: scale(12),
+  },
+  downloadsTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(8),
+  },
+  downloadsTitle: {
+    fontSize: moderateScale(15),
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  activeDownloadingBadge: {
+    backgroundColor: '#0284c7',
+    paddingHorizontal: scale(6),
+    paddingVertical: verticalScale(1),
+    borderRadius: scale(8),
+  },
+  activeDownloadingBadgeText: {
+    fontSize: moderateScale(9.5),
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  downloadsSubtitle: {
+    fontSize: moderateScale(11.5),
+    color: '#94a3b8',
+    marginTop: verticalScale(2),
+  },
+  downloadsArrow: {
+    marginLeft: scale(8),
   },
   sectionCard: {
     backgroundColor: '#18181b',

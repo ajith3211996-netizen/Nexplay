@@ -571,26 +571,15 @@ var ClientUtils = class {
       return 1;
     }
     // 2. [Download FSL v2 server] (FastDL / Bunker / Valentine / Lenin CDN / Pongala)
-    if (u.includes('fastdl') || u.includes('bunker.monster') || u.includes('valentine.guru') || u.includes('pongala.life') || u.includes('lenin.buzz') || s.includes('fslv2') || s.includes('fsl v2') || s.includes('fastdl')) {
+    if (u.includes('fastdl') || u.includes('bunker.monster') || u.includes('valentine.guru') || u.includes('pongala.life') || u.includes('lenin.buzz') || s.includes('fslv2') || s.includes('fsl v2')) {
       return 2;
     }
     // 3. pixeldrain (PixelDrain Direct CDN Stream)
     if (u.includes('pixeldrain.dev/api/file') || u.includes('pixeldrain.com/api/file') || s.includes('pixel') || s.includes('pixeldrain')) {
       return 3;
     }
-    // 4. Watch online (Direct player / HLS stream)
-    if (u.includes('.m3u8') || s.includes('watch online') || s.includes('hdstream4u') || s.includes('hubstream') || s.includes('m4uplay')) {
-      return 4;
-    }
-    // 5. Cloudflare Workers / HubCDN Direct
-    if (u.includes('workers.dev') || u.includes('hubcdn') || s.includes('worker')) {
-      return 5;
-    }
-    // Strictly reject Google CDN / Server : 10Gbps links
-    if (u.includes('googleusercontent.com') || u.includes('video-downloads') || s.includes('server : 10gbps') || s.includes('server: 10gbps') || s.includes('google cdn') || (s.includes('10gbps') && !s.includes('fsl') && !s.includes('r2'))) {
-      return 999;
-    }
-    return 50;
+    // All other servers strictly rejected
+    return 999;
   }
 
   static getQualityWeight(qStr) {
@@ -609,32 +598,39 @@ var ClientUtils = class {
       if (!c || !c.url) return false;
       const u = c.url.toLowerCase();
       const s = (c.server || '').toLowerCase();
-      return !u.includes('googleusercontent.com') && !u.includes('video-downloads') && !s.includes('server : 10gbps') && !s.includes('google cdn');
+
+      // USER REQUIREMENT: Use ONLY [download fsl server], [download fsl v2 server], and pixeldrain
+      const isFsl = s.includes('fsl server') || u.includes('r2.cloudflarestorage.com') || u.includes('r2.dev');
+      const isFslV2 = s.includes('fslv2') || s.includes('fsl v2') || u.includes('fastdl') || u.includes('bunker.monster') || u.includes('valentine.guru') || u.includes('pongala.life') || u.includes('lenin.buzz');
+      const isPixel = s.includes('pixel') || u.includes('pixeldrain.com') || u.includes('pixeldrain.dev');
+
+      if (!isFsl && !isFslV2 && !isPixel) {
+        return false;
+      }
+
+      if (u.includes('googleusercontent.com') || u.includes('video-downloads') || s.includes('server : 10gbps') || s.includes('google cdn')) {
+        return false;
+      }
+
+      // Strictly only accept streams confirmed to support HTTP 206 Partial Content
+      return c.supports206 === true;
     });
     if (filtered.length === 0) return null;
     const sorted = [...filtered].sort((a, b) => {
-      // 1. Strict Priority: Streams that support HTTP 206 Partial Content / HLS seeking rank ahead of non-seekable streams
-      const a206 = a.supports206 ?? (a.url?.includes('.m3u8') || (!a.url?.includes('googleusercontent.com') && !a.url?.includes('video-downloads')));
-      const b206 = b.supports206 ?? (b.url?.includes('.m3u8') || (!b.url?.includes('googleusercontent.com') && !b.url?.includes('video-downloads')));
-      if (a206 && !b206) return -1;
-      if (!a206 && b206) return 1;
-
-      // 2. Default playback quality preference: 1080p FIRST as default!
       const aIs1080 = (a.quality || a.q || '').toLowerCase().includes('1080');
       const bIs1080 = (b.quality || b.q || '').toLowerCase().includes('1080');
       const prioA = a.priority ?? this.getStreamPriority(a.url, a.server);
       const prioB = b.priority ?? this.getStreamPriority(b.url, b.server);
 
-      // When both are high-speed streams (priority <= 5), prefer 1080p for default playback
-      if (prioA <= 5 && prioB <= 5) {
+      // When both are verified high-speed streams (priority <= 3), prefer 1080p for default playback
+      if (prioA <= 3 && prioB <= 3) {
         if (aIs1080 && !bIs1080) return -1;
         if (!aIs1080 && bIs1080) return 1;
       }
 
       if (prioA !== prioB) {
-        return prioA - prioB; // 1 (FSL) < 2 (FSLv2) < 3 (Pixeldrain) < 4 (Watch online) < 5
+        return prioA - prioB; // 1 (FSL) < 2 (FSLv2) < 3 (Pixeldrain)
       }
-      // If priorities are tied, prioritize 1080p > 720p > 4K > 480p
       return this.getQualityWeight(b.quality || b.q) - this.getQualityWeight(a.quality || a.q);
     });
     return sorted[0];
@@ -1067,65 +1063,7 @@ var ClientUtils = class {
             }
           }
         }
-        // 4. Watch Online streaming link on page - Priority 4
-        else if (link.includes('hdstream4u') || link.includes('hubstream') || link.includes('m4uplay') || text.toLowerCase().includes('watch online')) {
-          if (link.startsWith('http') && !link.includes('winexch') && !link.includes('snvhost') && !link.includes('tutorial')) {
-            streamLinks.push({
-              server: "Watch Online (High-Speed Stream)",
-              url: link,
-              quality: qualityHint,
-              originalUrl: startUrl,
-              type: "hls",
-              headers: defaultHeaders,
-              mimeType: "application/x-mpegURL",
-              priority: 4
-            });
-          }
-        }
-        // 5. Cloudflare Worker Stream
-        else if ((link.includes('.dev') || link.includes('workers.dev')) && !link.includes('/?id=')) {
-          const workerHeaders = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "*/*",
-            "Referer": "https://gamerxyt.com/"
-          };
-          streamLinks.push({
-            server: "Download File (Cloudflare Worker Stream)",
-            url: link,
-            quality: qualityHint,
-            originalUrl: startUrl,
-            type: "direct",
-            headers: workerHeaders,
-            mimeType: this.detectMimeType(link),
-            priority: 5
-          });
-        }
-        // 6. HubCDN
-        else if (link.includes('hubcdn') && !link.includes('/?id=')) {
-          streamLinks.push({
-            server: "Download [HubCDN] (Direct Stream)",
-            url: link,
-            quality: qualityHint,
-            originalUrl: startUrl,
-            type: "direct",
-            headers: defaultHeaders,
-            mimeType: this.detectMimeType(link),
-            priority: 5
-          });
-        }
-        // 7. Direct Video Link Fallback (.mkv / .mp4)
-        else if (link.includes('.mkv') || link.includes('.mp4')) {
-          streamLinks.push({
-            server: "Direct Media Stream",
-            url: link,
-            quality: qualityHint,
-            originalUrl: startUrl,
-            type: "direct",
-            headers: defaultHeaders,
-            mimeType: this.detectMimeType(link),
-            priority: 5
-          });
-        }
+        /* Non-FSL / non-Pixel servers eliminated per user requirement */
       }
 
       // Explicit check for Pixeldrain in scripts/HTML if not captured during anchor loop
@@ -1148,7 +1086,7 @@ var ClientUtils = class {
         }
       }
 
-      // Check script tags on vcloudText for hidden worker / R2 links
+      // Check script tags on vcloudText for hidden R2 links
       const scriptRegex = /<script[\s\S]*?<\/script>/gi;
       let sm;
       while ((sm = scriptRegex.exec(vcloudText)) !== null) {
@@ -1168,28 +1106,27 @@ var ClientUtils = class {
             });
           }
         }
-        const workerMatches = sContent.matchAll(/https?:\/\/[^"'\s<>]+\.workers\.dev\/[^"'\s<>]+/gi);
-        for (const wm of workerMatches) {
-          if (!streamLinks.some(s => s.url === wm[0])) {
-            streamLinks.push({
-              server: "Download File (Cloudflare Worker Stream)",
-              url: wm[0],
-              quality: qualityHint,
-              originalUrl: startUrl,
-              type: "direct",
-              headers: defaultHeaders,
-              mimeType: this.detectMimeType(wm[0]),
-              priority: 5
-            });
-          }
-        }
       }
 
       const filteredLinks = streamLinks.filter(s => {
         if (!s || !s.url) return false;
         const u = s.url.toLowerCase();
         const srv = (s.server || '').toLowerCase();
-        return !u.includes('googleusercontent.com') && !u.includes('video-downloads') && !srv.includes('server : 10gbps') && !srv.includes('google cdn');
+
+        // USER REQUIREMENT: Use ONLY [download fsl server], [download fsl v2 server], and pixeldrain
+        const isFsl = srv.includes('fsl server') || u.includes('r2.cloudflarestorage.com') || u.includes('r2.dev');
+        const isFslV2 = srv.includes('fslv2') || srv.includes('fsl v2') || u.includes('fastdl') || u.includes('bunker.monster') || u.includes('valentine.guru') || u.includes('pongala.life') || u.includes('lenin.buzz');
+        const isPixel = srv.includes('pixel') || u.includes('pixeldrain.com') || u.includes('pixeldrain.dev');
+
+        if (!isFsl && !isFslV2 && !isPixel) {
+          return false;
+        }
+
+        if (u.includes('googleusercontent.com') || u.includes('video-downloads') || srv.includes('server : 10gbps') || srv.includes('google cdn')) {
+          return false;
+        }
+
+        return true;
       });
       filteredLinks.sort((a, b) => a.priority - b.priority);
       return filteredLinks;

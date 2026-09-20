@@ -1215,7 +1215,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
             uri: safeInitialLink,
             headers: videoHeaders,
             useCaching: false, // Direct OkHttpDataSource for unrestricted HTTP 206 byte-range seeking
-            contentType: isHls ? 'hls' : 'auto'
+        contentType: isHls ? 'hls' : 'auto'
           };
 
           setPlaybackError(null);
@@ -1750,12 +1750,10 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     if (player) {
       try {
         const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : 100000);
-        const baseTime = (pendingSeekTimeRef.current !== null && typeof pendingSeekTimeRef.current === 'number')
-          ? pendingSeekTimeRef.current
-          : ((typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0) 
-            ? currentTimeRef.current 
-            : ((typeof player.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0)));
-        const target = Math.min(safeDuration, Math.max(0, baseTime + 10));
+        const cur = (typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0)
+          ? currentTimeRef.current
+          : ((typeof player.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0));
+        const target = Math.min(safeDuration, Math.max(0, cur + 10));
 
         pendingSeekTimeRef.current = target;
         isSeekingRef.current = true;
@@ -1765,11 +1763,12 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         stallsHistoryRef.current = [];
         currentTimeRef.current = target;
         setCurrentTime(target);
-        try {
-          console.log(`[MovieDetailScreen] ⏩ skipForward to ${target.toFixed(1)}s`);
+
+        console.log(`[MovieDetailScreen] ⏩ skipForward to ${target.toFixed(1)}s`);
+        if (typeof player.seekBy === 'function') {
+          player.seekBy(10);
+        } else {
           player.currentTime = target;
-        } catch (sErr) {
-          console.warn('[MovieDetailScreen] skipForward seekTo error:', sErr);
         }
       } catch (e) {
         console.warn('[MovieDetailScreen] skipForward error:', e);
@@ -1781,12 +1780,10 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   const skipBackward = () => {
     if (player) {
       try {
-        const baseTime = (pendingSeekTimeRef.current !== null && typeof pendingSeekTimeRef.current === 'number')
-          ? pendingSeekTimeRef.current
-          : ((typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0) 
-            ? currentTimeRef.current 
-            : ((typeof player.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0)));
-        const target = Math.max(0, baseTime - 10);
+        const cur = (typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0)
+          ? currentTimeRef.current
+          : ((typeof player.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0));
+        const target = Math.max(0, cur - 10);
 
         pendingSeekTimeRef.current = target;
         isSeekingRef.current = true;
@@ -1796,11 +1793,12 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         stallsHistoryRef.current = [];
         currentTimeRef.current = target;
         setCurrentTime(target);
-        try {
-          console.log(`[MovieDetailScreen] ⏪ skipBackward to ${target.toFixed(1)}s`);
+
+        console.log(`[MovieDetailScreen] ⏪ skipBackward to ${target.toFixed(1)}s`);
+        if (typeof player.seekBy === 'function') {
+          player.seekBy(-10);
+        } else {
           player.currentTime = target;
-        } catch (sErr) {
-          console.warn('[MovieDetailScreen] skipBackward seekTo error:', sErr);
         }
       } catch (e) {
         console.warn('[MovieDetailScreen] skipBackward error:', e);
@@ -1809,7 +1807,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     resetControlsTimeout();
   };
 
-  const changePlaybackSpeed = (speed) => {
+    const changePlaybackSpeed = (speed) => {
     setPlaybackSpeed(speed);
     if (player) {
       try {
@@ -2042,7 +2040,14 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         currentTimeRef.current = targetSeekTime;
         setCurrentTime(targetSeekTime);
         try {
-          player.currentTime = targetSeekTime;
+          const cur = typeof player.currentTime === 'number' ? player.currentTime : (currentTime || 0);
+          const diff = targetSeekTime - cur;
+          console.log('[MovieDetailScreen] 🎯 Seeking from', cur.toFixed(1), 'to', targetSeekTime.toFixed(1), 'diff:', diff.toFixed(1));
+          if (typeof player.seekBy === 'function' && Math.abs(diff) > 0.5) {
+            player.seekBy(diff);
+          } else {
+            player.currentTime = targetSeekTime;
+          }
         } catch (e) {
           console.warn('[MovieDetailScreen] Scrubber seek error:', e);
         }

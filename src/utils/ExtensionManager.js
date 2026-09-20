@@ -244,11 +244,14 @@ class ExtensionManagerService {
 
     if (link.startsWith('http') && (
       link.includes('r2.cloudflarestorage.com') || 
-      link.includes('.mkv') || 
-      link.includes('.mp4') || 
-      link.includes('workers.dev') ||
+      link.includes('r2.dev') ||
+      link.includes('fastdl') ||
       link.includes('bunker.monster') ||
-      link.includes('valentine.guru')
+      link.includes('valentine.guru') ||
+      link.includes('pongala.life') ||
+      link.includes('lenin.buzz') ||
+      link.includes('pixeldrain.com') ||
+      link.includes('pixeldrain.dev')
     )) {
       let detectedQ = '1080p';
       if (lower.includes('2160') || lower.includes('4k') || lower.includes('uhd')) {
