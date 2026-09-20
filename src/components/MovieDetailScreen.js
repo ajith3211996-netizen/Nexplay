@@ -43,6 +43,29 @@ import {
 import { ExtensionManager } from '../utils/ExtensionManager';
 import { DownloadManager } from '../utils/DownloadManager';
 
+// Safe URL sanitizer for Media3 ExoPlayer:
+// Preserves AWS/Cloudflare R2 presigned URLs (%2F in credentials must NOT become %252F)
+// while properly encoding spaces and brackets in Cloudflare Worker streams
+function sanitizePlayableUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
+  let url = rawUrl.trim();
+  if (url.includes('X-Amz-') || url.includes('cloudflarestorage.com') || url.includes('r2.dev')) {
+    if (url.includes(' ')) {
+      url = url.replace(/ /g, '%20');
+    }
+    return url;
+  }
+  try {
+    if (url.includes(' ') || url.includes('[') || url.includes(']')) {
+      url = encodeURI(decodeURI(url));
+    }
+  } catch (_) {
+    url = url.replace(/ /g, '%20');
+  }
+  return url;
+}
+
+
 // Curated High-Definition Fallback Cast & Recommendations matching the reference design
 const DEFAULT_CAST = [
   { id: 'c1', name: 'Timothée Chalamet', character: 'Paul Atreides', image: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?q=80&w=300&auto=format&fit=crop' },
@@ -165,6 +188,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasStartedPlayback, setHasStartedPlayback] = useState(false);
   const [hasFirstFrameRendered, setHasFirstFrameRendered] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const isBufferingRef = useRef(false);
   const [currentTime, setCurrentTime] = useState(0);
   const currentTimeRef = useRef(0);
   const [duration, setDuration] = useState(0);
@@ -477,6 +502,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   const isScrubbingRef = useRef(false);
   const pendingSeekTimeRef = useRef(null);
   const scrubberPageXRef = useRef(0);
+  const scrubStartLocationX = useRef(0);
   const scrubberRef = useRef(null);
 
   const showAbrToast = (msg) => {
@@ -717,19 +743,31 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     playerInstance.keepScreenOnWhilePlaying = true;
     playerInstance.timeUpdateEventInterval = 0.5;
     playerInstance.bufferOptions = {
-      preferredForwardBufferDuration: 120, // 120s forward buffer window (smooth continuous pre-buffering)
-      waitsToMinimizeStalling: false, // Stream at full unthrottled 1 to 40+ Mbps without artificial pauses
-      minBufferForPlayback: 0.5, // Start playback instantly (0.5s) while buffering continues at max speed
-      maxBufferBytes: 0, // 0 = C.LENGTH_UNSET in Android Media3 ExoPlayer: unconstrained bandwidth consumption (1 to 40+ Mbps)
+      preferredForwardBufferDuration: 60, // 60s forward lookahead window
+      waitsToMinimizeStalling: true, // Enables Media3 stall minimization for seamless playback (matches VLC)
+      minBufferForPlayback: 1.0, // 2.5s healthy pre-buffer cushion before playback begins (matches VLC network caching)
+      maxBufferBytes: 0, // Unconstrained allocation based on bitrate
       prioritizeTimeOverSizeThreshold: true,
     };
     try {
       playerInstance.seekTolerance = {
-        toleranceBefore: 0.5,
-        toleranceAfter: 0.5,
+        toleranceBefore: 5.0,
+            toleranceAfter: 5.0,
       };
     } catch (e) {}
   });
+
+  // Derived player buffering state (active during active seek, initial load, or when stalled and NOT playing)
+  const isBufferingState = Boolean(
+    hasStartedPlayback &&
+    !isResolving &&
+    !playbackError &&
+    (
+      isSeekingRef.current ||
+      !hasFirstFrameRendered ||
+      (isBuffering && (!player || !player.playing))
+    )
+  );
 
   // Dynamically listen to timeUpdate events from Media3 ExoPlayer
   useEventListener(player, 'timeUpdate', (event) => {
@@ -741,22 +779,28 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         const pSeek = pendingSeekTimeRef.current;
         const timeSinceSeek = now - lastSeekTimestampRef.current;
 
-        const hasReachedTarget = Math.abs(event.currentTime - pSeek) < 2.5;
+        // Discard stale ticks from pre-seek position until ExoPlayer lands near target seek timestamp (or 8s timeout)
+        const hasLandedAtTarget = Math.abs(event.currentTime - pSeek) <= 10.0;
         const isTimedOut = timeSinceSeek > 4000;
 
-        // Discard stale pre-seek timeUpdates until ExoPlayer lands near target seek timestamp
-        if (!hasReachedTarget && !isTimedOut) {
+        if (!hasLandedAtTarget && !isTimedOut) {
           return;
         }
 
-        // Seek has successfully landed or timed out
+        // Seek has landed on keyframe or settled! Immediately unblock player & update UI
         pendingSeekTimeRef.current = null;
         isSeekingRef.current = false;
+        setIsBuffering(false);
+        isBufferingRef.current = false;
       }
 
       currentTimeRef.current = event.currentTime;
       if (event.currentTime > 0.01) {
         setHasFirstFrameRendered(true);
+        if (isBufferingRef.current) {
+          setIsBuffering(false);
+          isBufferingRef.current = false;
+        }
       }
 
       // Always update currentTime state when controls are visible or seeking just completed
@@ -765,9 +809,13 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       }
 
       // Track playback progression
-      if (Math.abs(event.currentTime - lastPlaybackPositionRef.current) > 0.3) {
+      if (Math.abs(event.currentTime - lastPlaybackPositionRef.current) > 0.2) {
         lastPlaybackPositionRef.current = event.currentTime;
         lastProgressTimestampRef.current = now;
+        if (isBufferingRef.current) {
+          setIsBuffering(false);
+          isBufferingRef.current = false;
+        }
       }
     }
     if (player && player.duration && player.duration > 0 && player.duration !== duration) {
@@ -777,16 +825,13 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
   // Dynamically listen to play/pause state changes
   useEventListener(player, 'playingChange', (event) => {
-    if (event && typeof event.isPlaying === 'boolean') {
-      setIsPlaying(event.isPlaying);
-      if (event.isPlaying) {
-        setHasFirstFrameRendered(true);
-      }
-    } else if (player) {
-      setIsPlaying(player.playing);
-      if (player.playing) {
-        setHasFirstFrameRendered(true);
-      }
+    const isNowPlaying = event && typeof event.isPlaying === 'boolean' ? event.isPlaying : (player ? player.playing : false);
+    setIsPlaying(isNowPlaying);
+    if (isNowPlaying) {
+      setHasFirstFrameRendered(true);
+    } else {
+      setIsBuffering(false);
+      isBufferingRef.current = false;
     }
   });
 
@@ -796,7 +841,10 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
     if (currentStatus === 'readyToPlay') {
       setHasFirstFrameRendered(true);
+      pendingSeekTimeRef.current = null;
       isSeekingRef.current = false;
+      setIsBuffering(false);
+      isBufferingRef.current = false;
 
       if (hasStartedPlayback) {
         try {
@@ -823,15 +871,37 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       } catch (trackErr) {}
     }
 
-    // Keep playback smooth without tearing down progressive streams during temporary buffering
-    if (currentStatus === 'loading' && isPlaying && hasStartedPlayback && !isResolving) {
-      stallsHistoryRef.current = [];
+    // Handle buffering state: only set isBuffering if not yet rendered or stalled while not playing
+    if (currentStatus === 'loading') {
+      if (hasStartedPlayback && !isResolving && (!hasFirstFrameRendered || (player && !player.playing))) {
+        setIsBuffering(true);
+        isBufferingRef.current = true;
+      }
+      if (isPlaying && hasStartedPlayback && !isResolving) {
+        stallsHistoryRef.current = [];
+      }
     }
 
     // Strictly only trigger playback error if user started playback AND scraping is finished and not resolving
     if (hasStartedPlayback && !isResolving && !isResolvingRef.current && (currentStatus === 'error')) {
       const errorMsg = event?.error?.message || 'Video stream could not be decoded or is offline.';
       console.warn('[MovieDetailScreen] Player error status detected:', errorMsg);
+
+      // Automatic Quality Fallback: If current quality failed, seamlessly fallback to an alternative available quality
+      if (resolvedQualities && typeof resolvedQualities === 'object') {
+        const availableKeys = Object.keys(resolvedQualities).filter(k => k.toLowerCase() !== currentQuality.toLowerCase() && resolvedQualities[k]);
+        if (availableKeys.length > 0) {
+          const nextQuality = availableKeys.find(k => k.includes('720')) || availableKeys.find(k => k.includes('4k')) || availableKeys[0];
+          const nextUrl = resolvedQualities[nextQuality];
+          if (nextUrl) {
+            console.log(`[MovieDetailScreen] 🔄 Playback error on ${currentQuality}. Auto-switching to alternative quality: ${nextQuality}`);
+            showAbrToast(`🔄 Auto-switching to ${nextQuality.toUpperCase()} stream`);
+            playResolvedLink(nextUrl, nextQuality, false);
+            return;
+          }
+        }
+      }
+
       try {
         if (player) {
           player.pause();
@@ -913,6 +983,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     setDuration(0);
     setHasFirstFrameRendered(false);
     setHasStartedPlayback(true);
+    setIsBuffering(true);
+    isBufferingRef.current = true;
 
     // Offline local media check (Direct offline playback without internet)
     if (movie?.isOffline && movie?.localFileUri) {
@@ -994,7 +1066,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           seasonNumber: targetSeason,
           episodeNumber: targetEpisodeNum,
           originalLanguage: origLang,
-          isIndianRegion: isIndianContent
+          isIndianRegion: isIndianContent,
+          allowCrossProviderFallback: false
         });
       } catch (e) {
         console.log(`[MovieDetailScreen] Primary Vega resolution note:`, e?.message || e);
@@ -1053,7 +1126,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       setResolvedQualities(qualities);
       setResolvedQualitySizes(qualitySizes);
 
-      let initialQuality = (qualities['4k'] ? '4k' : (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : (qualities['480p'] ? '480p' : Object.keys(qualities)[0]))));
+      // Player strictly plays 1080p as default if available
+      let initialQuality = (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : (qualities['4k'] ? '4k' : Object.keys(qualities)[0])));
       let initialStreamLink = qualities[initialQuality] || streamUrl;
 
       // Strictly verify HTTP 206 Partial Content (Range seeking) support before playing!
@@ -1062,11 +1136,12 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         const check206Support = async (url) => {
           if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
           if (url.toLowerCase().includes('.m3u8')) return true; // HLS is chunk-indexed and natively seekable
+          if (url.includes('cloudflarestorage.com') || url.includes('r2.')) return true; // Direct Cloudflare R2 verified seekable stream
           if (url.includes('googleusercontent.com') || url.includes('video-downloads')) return false; // Google CDN rejects 206
           try {
             const controller = new AbortController();
             const timer = setTimeout(() => { try { controller.abort(); } catch (_) {} }, 2500);
-            const isDirectCdn = url.includes('pixeldrain') || url.includes('cloudflarestorage.com') || url.includes('fastdl') || url.includes('bunker.monster');
+            const isDirectCdn = url.includes('pixeldrain') || url.includes('cloudflarestorage.com') || url.includes('fastdl') || url.includes('bunker.monster') || url.includes('workers.dev');
             const defaultRef = playable?.headers?.Referer || (!isDirectCdn ? 'https://gamerxyt.com/' : undefined);
             const res = await fetch(url.trim(), {
               method: 'GET',
@@ -1118,19 +1193,19 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       // 4. Feed streaming link directly to Media3 ExoPlayer cleanly (prevents black screen with audio)
       if (player && requestId === activeScrapeRequestId.current && isMounted.current) {
         try {
-          const safeInitialLink = initialStreamLink.trim();
+          const safeInitialLink = sanitizePlayableUrl(initialStreamLink);
           const isHls = safeInitialLink.toLowerCase().includes('.m3u8');
           const isDirectCdn = safeInitialLink.includes('pixeldrain') || 
                               safeInitialLink.includes('googleusercontent.com') ||
                               safeInitialLink.includes('cloudflarestorage.com') ||
+                              safeInitialLink.includes('r2.dev') ||
+                              safeInitialLink.includes('X-Amz-') ||
                               safeInitialLink.includes('fastdl') ||
-                              safeInitialLink.includes('bunker.monster');
+                              safeInitialLink.includes('bunker.monster') || safeInitialLink.includes('workers.dev');
 
           const isM4u = safeInitialLink.includes('dramiyos') || safeInitialLink.includes('m4uplay');
           const videoHeaders = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-            'Connection': 'keep-alive',
             ...(playable?.headers?.Referer 
               ? { 'Referer': playable.headers.Referer } 
               : (!isDirectCdn ? { 'Referer': isM4u ? 'https://m4uplay.store/' : 'https://gamerxyt.com/' } : {}))
@@ -1139,6 +1214,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           const videoSource = {
             uri: safeInitialLink,
             headers: videoHeaders,
+            useCaching: false, // Direct OkHttpDataSource for unrestricted HTTP 206 byte-range seeking
             contentType: isHls ? 'hls' : 'auto'
           };
 
@@ -1152,9 +1228,9 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           if (isMounted.current && player) {
             try {
               player.bufferOptions = {
-                preferredForwardBufferDuration: 120,
-                waitsToMinimizeStalling: false,
-                minBufferForPlayback: 0.5,
+                preferredForwardBufferDuration: 60,
+                waitsToMinimizeStalling: true,
+                minBufferForPlayback: 1.0,
                 maxBufferBytes: 0,
                 prioritizeTimeOverSizeThreshold: true,
               };
@@ -1162,22 +1238,24 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
             try {
               player.seekTolerance = {
-                toleranceBefore: 0.5,
-                toleranceAfter: 0.5,
+                toleranceBefore: 5.0,
+            toleranceAfter: 5.0,
               };
             } catch (sErr) {}
 
             try {
               player.playbackRate = playbackSpeed || 1.0;
             } catch (e) {}
-            player.play();
-            setIsPlaying(true);
+            if (player.status === 'readyToPlay') {
+              player.play();
+              setIsPlaying(true);
+            }
           }
         } catch (playerErr) {
           console.warn("[MovieDetailScreen] Media3 player replace error:", playerErr);
           if (isMounted.current && player) {
             try {
-              const safeInitialLink = initialStreamLink.trim();
+              const safeInitialLink = sanitizePlayableUrl(initialStreamLink);
               if (typeof player.replaceAsync === 'function') {
                 await player.replaceAsync(safeInitialLink);
               } else {
@@ -1217,6 +1295,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     }
     setPlaybackError(null);
     setHasFirstFrameRendered(false);
+    setIsBuffering(true);
+    isBufferingRef.current = true;
     const previousTime = (typeof player.currentTime === 'number' && player.currentTime > 0 ? player.currentTime : (currentTimeRef.current || currentTime)) || 0;
     
     console.log(`[MovieDetailScreen] ⚡ Seamless switch to ${targetQ.toUpperCase()} stream at position ${previousTime.toFixed(1)}s: ${streamUrl}`);
@@ -1228,13 +1308,15 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       setAvailableAudioTracks([]);
       setAvailableSubtitleTracks([]);
 
-      const safeStreamUrl = streamUrl.trim();
+      const safeStreamUrl = sanitizePlayableUrl(streamUrl);
       const isHls = safeStreamUrl.toLowerCase().includes('.m3u8');
       const isDirectCdn = safeStreamUrl.includes('pixeldrain') || 
                           safeStreamUrl.includes('googleusercontent.com') ||
                           safeStreamUrl.includes('cloudflarestorage.com') ||
+                          safeStreamUrl.includes('r2.dev') ||
+                          safeStreamUrl.includes('X-Amz-') ||
                           safeStreamUrl.includes('fastdl') ||
-                          safeStreamUrl.includes('bunker.monster');
+                          safeStreamUrl.includes('bunker.monster') || safeStreamUrl.includes('workers.dev');
 
       const isM4u = safeStreamUrl.includes('dramiyos') || safeStreamUrl.includes('m4uplay');
       const defaultReferer = isM4u ? 'https://m4uplay.store/' : 'https://gamerxyt.com/';
@@ -1242,8 +1324,6 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         uri: safeStreamUrl,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': '*/*',
-          'Connection': 'keep-alive',
           ...(!isDirectCdn ? { 'Referer': defaultReferer } : {})
         },
         contentType: isHls ? 'hls' : 'auto'
@@ -1258,9 +1338,9 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       if (isMounted.current && player) {
         try {
           player.bufferOptions = {
-            preferredForwardBufferDuration: 120,
-            waitsToMinimizeStalling: false,
-            minBufferForPlayback: 0.5,
+            preferredForwardBufferDuration: 60,
+            waitsToMinimizeStalling: true,
+            minBufferForPlayback: 1.0,
             maxBufferBytes: 0,
             prioritizeTimeOverSizeThreshold: true,
           };
@@ -1268,8 +1348,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
         try {
           player.seekTolerance = {
-            toleranceBefore: 0.5,
-            toleranceAfter: 0.5,
+            toleranceBefore: 5.0,
+            toleranceAfter: 5.0,
           };
         } catch (sErr) {}
 
@@ -1291,7 +1371,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       console.warn("[MovieDetailScreen] playResolvedLink error:", e);
       if (isMounted.current && player) {
         try {
-          const safeStreamUrl = streamUrl.trim();
+          const safeStreamUrl = sanitizePlayableUrl(streamUrl);
           if (typeof player.replaceAsync === 'function') {
             await player.replaceAsync(safeStreamUrl);
           } else {
@@ -1442,7 +1522,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           episodeNumber: targetEpisodeNum,
           provider: providerValue,
           originalLanguage: origLang,
-          isIndianRegion: isIndianContent
+          isIndianRegion: isIndianContent,
+          allowCrossProviderFallback: false
         });
 
         if (playable?.qualities && Object.keys(playable.qualities).length > 0) {
@@ -1678,18 +1759,17 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
         pendingSeekTimeRef.current = target;
         isSeekingRef.current = true;
+        setIsBuffering(true);
+        isBufferingRef.current = true;
         lastSeekTimestampRef.current = Date.now();
         stallsHistoryRef.current = [];
         currentTimeRef.current = target;
         setCurrentTime(target);
-        if (typeof player.seekBy === 'function') {
-          try {
-            player.seekBy(10);
-          } catch (_) {
-            player.currentTime = target;
-          }
-        } else {
+        try {
+          console.log(`[MovieDetailScreen] ⏩ skipForward to ${target.toFixed(1)}s`);
           player.currentTime = target;
+        } catch (sErr) {
+          console.warn('[MovieDetailScreen] skipForward seekTo error:', sErr);
         }
       } catch (e) {
         console.warn('[MovieDetailScreen] skipForward error:', e);
@@ -1710,18 +1790,17 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
         pendingSeekTimeRef.current = target;
         isSeekingRef.current = true;
+        setIsBuffering(true);
+        isBufferingRef.current = true;
         lastSeekTimestampRef.current = Date.now();
         stallsHistoryRef.current = [];
         currentTimeRef.current = target;
         setCurrentTime(target);
-        if (typeof player.seekBy === 'function') {
-          try {
-            player.seekBy(-10);
-          } catch (_) {
-            player.currentTime = target;
-          }
-        } else {
+        try {
+          console.log(`[MovieDetailScreen] ⏪ skipBackward to ${target.toFixed(1)}s`);
           player.currentTime = target;
+        } catch (sErr) {
+          console.warn('[MovieDetailScreen] skipBackward seekTo error:', sErr);
         }
       } catch (e) {
         console.warn('[MovieDetailScreen] skipBackward error:', e);
@@ -1877,21 +1956,46 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     })
   ).current;
 
-  const getScrubberSeekTime = (evt) => {
-    const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : 0);
+  const getScrubberSeekTime = (evt, gestureState) => {
+    const fallbackDuration = details?.runtime ? details.runtime * 60 : 0;
+    const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : fallbackDuration);
     if (safeDuration <= 0) return 0;
 
     const screenW = playerLayoutRef.current.width || windowWidth;
     const paddingX = isFullscreen ? Math.max(insets.left, scale(20)) : scale(10);
     const effectiveWidth = scrubberWidth > 0 ? scrubberWidth : Math.max(1, screenW - (paddingX * 2));
-    
-    let touchX = 0;
-    if (evt?.nativeEvent?.locationX !== undefined) {
-      touchX = evt.nativeEvent.locationX;
-    } else if (evt?.nativeEvent?.pageX !== undefined && scrubberPageXRef.current > 0) {
-      touchX = evt.nativeEvent.pageX - scrubberPageXRef.current;
+
+    let touchX = -1;
+
+    // 1. If dragging (dx is non-zero), offset from the initial touch point on the scrubber
+    if (gestureState && typeof gestureState.dx === 'number' && Math.abs(gestureState.dx) > 0 && scrubStartLocationX.current >= 0) {
+      touchX = scrubStartLocationX.current + gestureState.dx;
     }
-    const progressPercent = Math.max(0, Math.min(1, touchX / (effectiveWidth || 1)));
+    // 2. Direct local touch position on the scrubber View (always accurate on grant/tap)
+    else if (typeof evt?.nativeEvent?.locationX === 'number' && evt.nativeEvent.locationX > 0) {
+      touchX = evt.nativeEvent.locationX;
+    }
+    // 3. Absolute screen coordinates fallback (using measured trackLeft)
+    else {
+      const trackLeft = (scrubberPageXRef.current > 0) ? scrubberPageXRef.current : paddingX;
+      const pageX = evt?.nativeEvent?.pageX;
+      const moveX = gestureState?.moveX;
+      const x0 = gestureState?.x0;
+      if (typeof pageX === 'number' && pageX > 0) {
+        touchX = pageX - trackLeft;
+      } else if (typeof moveX === 'number' && moveX > 0) {
+        touchX = moveX - trackLeft;
+      } else if (typeof x0 === 'number' && x0 > 0) {
+        touchX = x0 - trackLeft;
+      }
+    }
+
+    if (touchX < 0) {
+      return currentTimeRef.current || 0;
+    }
+
+    const clampedTouchX = Math.max(0, Math.min(effectiveWidth, touchX));
+    const progressPercent = Math.max(0, Math.min(1, clampedTouchX / (effectiveWidth || 1)));
     return Math.max(0, Math.min(safeDuration, progressPercent * safeDuration));
   };
 
@@ -1901,30 +2005,39 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       onStartShouldSetPanResponderCapture: () => true,
       onMoveShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponderCapture: () => true,
-      onPanResponderGrant: (evt) => {
+      onPanResponderGrant: (evt, gestureState) => {
         if (!player || isControlsLockedRef.current) return;
         isScrubbingRef.current = true;
-        const targetSeekTime = getScrubberSeekTime(evt);
+        const locX = evt?.nativeEvent?.locationX;
+        scrubStartLocationX.current = (typeof locX === 'number' && locX >= 0) ? locX : 0;
+        const targetSeekTime = getScrubberSeekTime(evt, gestureState);
         pendingSeekTimeRef.current = targetSeekTime;
         currentTimeRef.current = targetSeekTime;
         setCurrentTime(targetSeekTime);
         resetControlsTimeout();
       },
-      onPanResponderMove: (evt) => {
+      onPanResponderMove: (evt, gestureState) => {
         if (!player || isControlsLockedRef.current) return;
-        const targetSeekTime = getScrubberSeekTime(evt);
+        const targetSeekTime = getScrubberSeekTime(evt, gestureState);
         pendingSeekTimeRef.current = targetSeekTime;
         currentTimeRef.current = targetSeekTime;
         setCurrentTime(targetSeekTime);
         resetControlsTimeout();
       },
-      onPanResponderRelease: (evt) => {
+      onPanResponderRelease: (evt, gestureState) => {
         if (!player || isControlsLockedRef.current) return;
         isScrubbingRef.current = false;
         isSeekingRef.current = true;
+        setIsBuffering(true);
+        isBufferingRef.current = true;
         lastSeekTimestampRef.current = Date.now();
         stallsHistoryRef.current = [];
-        const targetSeekTime = getScrubberSeekTime(evt);
+
+        // Prioritize target seek time: never let an Android release 0-coordinate reset playback!
+        const calculated = getScrubberSeekTime(evt, gestureState);
+        const targetSeekTime = (calculated > 0) ? calculated : (currentTimeRef.current > 0 ? currentTimeRef.current : 0);
+
+        console.log('[MovieDetailScreen] 🎯 Scrubber released at:', targetSeekTime.toFixed(1), 's');
         pendingSeekTimeRef.current = targetSeekTime;
         currentTimeRef.current = targetSeekTime;
         setCurrentTime(targetSeekTime);
@@ -1939,6 +2052,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         if (!player || isControlsLockedRef.current) return;
         isScrubbingRef.current = false;
         isSeekingRef.current = true;
+        setIsBuffering(true);
+        isBufferingRef.current = true;
         lastSeekTimestampRef.current = Date.now();
         stallsHistoryRef.current = [];
         const targetSeekTime = currentTimeRef.current;
@@ -1954,11 +2069,14 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   ).current;
 
   const handleScrubberTouch = (event) => {
-    const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : 0);
+    const fallbackDuration = details?.runtime ? details.runtime * 60 : 0;
+    const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : fallbackDuration);
     if (safeDuration <= 0) return;
     const targetSeekTime = getScrubberSeekTime(event);
 
     isSeekingRef.current = true;
+    setIsBuffering(true);
+    isBufferingRef.current = true;
     lastSeekTimestampRef.current = Date.now();
     stallsHistoryRef.current = [];
     pendingSeekTimeRef.current = targetSeekTime;
@@ -2114,6 +2232,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           nativeControls={false}
           onFirstFrameRender={() => {
             setHasFirstFrameRendered(true);
+            setIsBuffering(false);
+            isBufferingRef.current = false;
           }}
         />
 
@@ -2473,6 +2593,41 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           </TouchableOpacity>
         )}
 
+        {/* FLOATING CENTERED BUFFERING SPINNER (Displayed when video is buffering/seeking and controls are hidden) */}
+        {isBufferingState && !controlsVisible && !isResolving && !playbackError && (
+          <View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 35,
+            }}
+          >
+            <View
+              style={{
+                width: centerPlayBtnSize,
+                height: centerPlayBtnSize,
+                borderRadius: centerPlayBtnSize / 2,
+                backgroundColor: 'rgba(0, 0, 0, 0.65)',
+                borderWidth: 1.5,
+                borderColor: 'rgba(56, 189, 248, 0.5)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                shadowColor: '#38bdf8',
+                shadowOpacity: 0.4,
+                shadowRadius: 12,
+              }}
+            >
+              <ActivityIndicator size={isPortrait ? "small" : "large"} color="#38bdf8" />
+            </View>
+          </View>
+        )}
+
         {/* CONTROLS OVERLAY (Media3 / ExoPlayer layout style with smooth fade animation) */}
         {!isResolving && !isControlsLocked && !playbackError && (
           <Animated.View 
@@ -2648,7 +2803,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                 <View style={{ width: centerSkipBtnSize, height: centerSkipBtnSize }} />
               )}
 
-              {/* Center Play/Pause Button */}
+              {/* Center Play/Pause Button with Buffering Loading Animation */}
               <TouchableOpacity 
                 onPress={handlePlayerPlayPause}
                 activeOpacity={0.85}
@@ -2666,12 +2821,19 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                   shadowRadius: 10
                 }}
               >
-                <Ionicons 
-                  name={hasStartedPlayback && isPlaying ? "pause" : "play"} 
-                  size={centerPlayIconSize} 
-                  color="#000000" 
-                  style={(!hasStartedPlayback || !isPlaying) ? { marginLeft: scale(3) } : null}
-                />
+                {isBufferingState ? (
+                  <ActivityIndicator 
+                    size={isPortrait ? "small" : "large"} 
+                    color="#0284c7" 
+                  />
+                ) : (
+                  <Ionicons 
+                    name={hasStartedPlayback && isPlaying ? "pause" : "play"} 
+                    size={centerPlayIconSize} 
+                    color="#000000" 
+                    style={(!hasStartedPlayback || !isPlaying) ? { marginLeft: scale(3) } : null}
+                  />
+                )}
               </TouchableOpacity>
 
               {/* Skip Forward 10s */}
@@ -3307,8 +3469,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                     const standardKeys = [
                       { key: '4k', label: '4K Ultra HD (2160p)', desc: 'Ultra High Definition Master Stream' },
                       { key: '1080p', label: 'Full HD (1080p)', desc: 'Crisp High-Speed Master Stream' },
-                      { key: '720p', label: 'HD (720p)', desc: 'Balanced Quality & Speed' },
-                      { key: '480p', label: 'SD (480p)', desc: 'Fast Data Saver Stream' }
+                      { key: '720p', label: 'HD (720p)', desc: 'Balanced Quality & Speed' }
                     ];
 
                     for (const std of standardKeys) {
@@ -3769,12 +3930,16 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                         {/* Play overlay button */}
                         <View style={detailStyles.episodePlayOverlay}>
                           <View style={detailStyles.episodePlayCircle}>
-                            <Ionicons 
-                              name={isPlayingThisEp && isPlaying ? "pause" : "play"} 
-                              size={scale(13)} 
-                              color="#ffffff" 
-                              style={(!isPlayingThisEp || !isPlaying) ? { marginLeft: scale(1.5) } : null}
-                            />
+                            {isPlayingThisEp && isBufferingState ? (
+                              <ActivityIndicator size="small" color="#ffffff" />
+                            ) : (
+                              <Ionicons 
+                                name={isPlayingThisEp && isPlaying ? "pause" : "play"} 
+                                size={scale(13)} 
+                                color="#ffffff" 
+                                style={(!isPlayingThisEp || !isPlaying) ? { marginLeft: scale(1.5) } : null}
+                              />
+                            )}
                           </View>
                         </View>
                         {item.isFutureAir && (

@@ -175,10 +175,10 @@ class ExtensionManagerService {
 
     // Strict Server 1 (HDHub4u) & Server 2 (4KHDHub) rule: If both WEB-DL and WEBRip are available, consider ONLY WEB-DL
     if (activeProvider === 'hdhub4u' || activeProvider === '4khdhub') {
-      const isDl = (m) => /\bweb[-._]?dl\b/i.test(((m.match?.title || '') + ' ' + (m.match?.link || '')).toLowerCase());
-      const isRip = (m) => /\b(?:web[-._]?rip|webrip)\b/i.test(((m.match?.title || '') + ' ' + (m.match?.link || '')).toLowerCase());
-      if (allMatches.some(isDl) && allMatches.some(isRip)) {
-        allMatches = allMatches.filter(m => !isRip(m));
+      const isDl = (m) => /\bweb[-._]?dl\b/i.test(m.match?.title || '');
+      const isRipOnly = (m) => /\b(?:web[-._]?rip|webrip)\b/i.test(m.match?.title || '') && !isDl(m);
+      if (allMatches.some(isDl) && allMatches.some(isRipOnly)) {
+        allMatches = allMatches.filter(m => !isRipOnly(m));
       }
     }
 
@@ -248,9 +248,7 @@ class ExtensionManagerService {
       link.includes('.mp4') || 
       link.includes('workers.dev') ||
       link.includes('bunker.monster') ||
-      link.includes('valentine.guru') ||
-      link.includes('googleusercontent.com') ||
-      link.includes('video-downloads')
+      link.includes('valentine.guru')
     )) {
       let detectedQ = '1080p';
       if (lower.includes('2160') || lower.includes('4k') || lower.includes('uhd')) {
@@ -266,12 +264,12 @@ class ExtensionManagerService {
       if (playable && playable.streamUrl) {
         const streamList = [];
         if (playable.qualities && Object.keys(playable.qualities).length > 0) {
-          const orderedKeys = ['4k', '2160p', '1080p', '720p', '480p', ...Object.keys(playable.qualities).filter(k => !['4k', '2160p', '1080p', '720p', '480p'].includes(k))];
+          const orderedKeys = ['4k', '2160p', '1080p', '720p', ...Object.keys(playable.qualities).filter(k => !['4k', '2160p', '1080p', '720p', '480p'].includes(k))];
           for (const q of orderedKeys) {
-            if (playable.qualities[q]) {
+            if (playable.qualities[q] && q !== '480p') {
               streamList.push({
                 link: playable.qualities[q],
-                quality: (q.toUpperCase() === '4K' || q === '2160p') ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : (q === '480p' ? '480p' : q))),
+                quality: (q.toUpperCase() === '4K' || q === '2160p') ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : q)),
                 server: playable.server || 'Movies4u Direct',
                 headers: playable.headers,
                 mimeType: playable.mimeType
@@ -282,7 +280,7 @@ class ExtensionManagerService {
         if (streamList.length === 0) {
           streamList.push({
             link: playable.streamUrl,
-            quality: playable.quality || '4K',
+            quality: playable.quality || '1080p',
             server: playable.server || 'Movies4u Direct',
             headers: playable.headers,
             mimeType: playable.mimeType
@@ -297,12 +295,12 @@ class ExtensionManagerService {
       if (playable && playable.streamUrl) {
         const streamList = [];
         if (playable.qualities && Object.keys(playable.qualities).length > 0) {
-          const orderedKeys = ['4k', '2160p', '1080p', '720p', '480p', ...Object.keys(playable.qualities).filter(k => !['4k', '2160p', '1080p', '720p', '480p'].includes(k))];
+          const orderedKeys = ['4k', '2160p', '1080p', '720p', ...Object.keys(playable.qualities).filter(k => !['4k', '2160p', '1080p', '720p', '480p'].includes(k))];
           for (const q of orderedKeys) {
-            if (playable.qualities[q]) {
+            if (playable.qualities[q] && q !== '480p') {
               streamList.push({
                 link: playable.qualities[q],
-                quality: (q.toUpperCase() === '4K' || q === '2160p') ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : (q === '480p' ? '480p' : q))),
+                quality: (q.toUpperCase() === '4K' || q === '2160p') ? '4K' : (q === '1080p' ? '1080p' : (q === '720p' ? '720p' : q)),
                 server: playable.server || 'Direct Stream',
                 headers: playable.headers,
                 mimeType: playable.mimeType
@@ -347,7 +345,7 @@ class ExtensionManagerService {
     originalLanguage = 'en',
     isIndianRegion = false,
     provider = 'hdhub4u',
-    allowCrossProviderFallback = true
+    allowCrossProviderFallback = false
   }) {
     return this.findAndResolvePlayableStreamInternal({
       targetTitle,
@@ -371,7 +369,7 @@ class ExtensionManagerService {
     originalLanguage = 'en',
     isIndianRegion = false,
     provider = 'hdhub4u',
-    allowCrossProviderFallback = true
+    allowCrossProviderFallback = false
   }) {
     const cleanTitle = (targetTitle || '')
       .replace(/[:\-–—]/g, ' ')
@@ -418,8 +416,6 @@ class ExtensionManagerService {
       throw new Error(`No matching media post found for "${cleanTitle}" on ${activeProvider}.`);
     }
 
-    let googleCdnFallback = null;
-
     // Iterate through top candidate matching posts until a live playable stream is resolved
     for (const c of candidates.slice(0, 5)) {
       const match = c.match;
@@ -436,29 +432,52 @@ class ExtensionManagerService {
 
         if (playable && playable.streamUrl) {
           const isGoogleCdn = (playable.streamUrl || '').includes('googleusercontent.com') || (playable.streamUrl || '').includes('video-downloads');
-          const supports206 = playable.supports206 ?? (!isGoogleCdn && !playable.streamUrl.includes('googleusercontent.com'));
+          if (isGoogleCdn) {
+            console.log(`[ExtensionManager] ⚠️ Strictly rejecting Google CDN stream from ${matchedProvider}`);
+            continue;
+          }
+          const supports206 = playable.supports206 ?? true;
           const serverLabel = matchedProvider === 'movies4u' ? 'Server 3 (Movies4u)' : (matchedProvider === '4khdhub' ? 'Server 2 (4KHDHub)' : 'Server 1 (HDHub4u)');
+          
+          // Strictly default playback to 1080p if available among resolved stream qualities
+          const qualities = { ...(playable.qualities || {}) };
+          delete qualities['480p'];
+          delete qualities['480'];
+          delete qualities['sd'];
+          for (const [k, v] of Object.entries(qualities)) {
+            if (v && (v.includes('googleusercontent.com') || v.includes('video-downloads'))) {
+              delete qualities[k];
+            }
+          }
+          const qualitySizes = { ...(playable.qualitySizes || {}) };
+          delete qualitySizes['480p'];
+          delete qualitySizes['480'];
+          delete qualitySizes['sd'];
+          const has1080 = Boolean(qualities['1080p']);
+          const primaryStreamUrl = has1080 ? qualities['1080p'] : playable.streamUrl;
+          const primaryQuality = has1080 ? '1080p' : (playable.quality || '1080p');
+
+          if (!primaryStreamUrl || primaryStreamUrl.includes('googleusercontent.com') || primaryStreamUrl.includes('video-downloads')) {
+            continue;
+          }
+
           const candidateResult = {
             title: match.title,
-            streamUrl: playable.streamUrl,
-            qualities: playable.qualities || {},
+            streamUrl: primaryStreamUrl,
+            qualities: qualities,
             qualitySizes: playable.qualitySizes || {},
             headers: playable.headers || {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
             },
             mimeType: playable.mimeType || 'video/x-matroska',
-            quality: playable.quality || '1080p',
+            quality: primaryQuality,
             server: playable.server || serverLabel,
             supports206: supports206,
             thumbnail: match.image || playable.thumbnail,
             subtitles: playable.subtitles || []
           };
 
-          // If this stream does NOT support HTTP 206 Partial Content (e.g. Google CDN), hold it as fallback
-          if (!supports206 || isGoogleCdn) {
-            if (!googleCdnFallback) {
-              googleCdnFallback = candidateResult;
-            }
+          if (!supports206) {
             continue;
           }
 
@@ -470,12 +489,12 @@ class ExtensionManagerService {
       }
     }
 
-    // If only non-206 / Google CDN was found on this provider, check other providers for FSL / FSLv2 / Pixeldrain / Watch Online first!
+    // Cross-provider fallback if stream not resolved on primary provider
     if (allowCrossProviderFallback) {
       const otherProviders = ['hdhub4u', '4khdhub', 'movies4u'].filter(p => p !== activeProvider);
       for (const alt of otherProviders) {
         try {
-          console.log(`[ExtensionManager] Checking alternative provider ${alt} for non-Google CDN stream...`);
+          console.log(`[ExtensionManager] Checking alternative provider ${alt} for stream...`);
           const altResult = await this.findAndResolvePlayableStreamInternal({
             targetTitle: cleanTitle,
             targetYear,
@@ -493,12 +512,6 @@ class ExtensionManagerService {
           }
         } catch (_) {}
       }
-    }
-
-    // Only if all providers lack FSL / FSLv2 / Pixeldrain / Watch Online, return Google CDN as absolute last resort
-    if (googleCdnFallback) {
-      console.log(`[ExtensionManager] ⚠️ Across providers, only Google CDN is available. Returning as last resort: [${googleCdnFallback.server}]`);
-      return googleCdnFallback;
     }
 
     throw new Error(`Could not resolve direct stream for "${cleanTitle}" on ${activeProvider}.`);
@@ -532,7 +545,8 @@ class ExtensionManagerService {
       seasonNumber,
       episodeNumber,
       originalLanguage: media.original_language || 'en',
-      provider
+      provider,
+      allowCrossProviderFallback: false
     });
   }
 
