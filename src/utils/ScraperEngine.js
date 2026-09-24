@@ -1433,12 +1433,12 @@ export function defaultSizeForQuality(q) {
 
 var HDHub4uClient = class {
   constructor() {
-    this.baseUrl = "https://new5.hdhub4u.cl";
+    this.baseUrl = "https://new6.hdhub4u.cl";
     this.mirrors = [
+      "https://new6.hdhub4u.cl",
       "https://new5.hdhub4u.cl",
-      "https://hdhub4u.ms",
-      "https://hdhub4u.tv",
-      "https://hdhub4u.bi"
+      "https://hdhub4u.bi",
+      "https://hdhub4u.ms"
     ];
   }
 
@@ -1473,6 +1473,14 @@ var HDHub4uClient = class {
 
     const searchQueries = [cleanQuery];
     if (baseTitle && baseTitle !== cleanQuery) searchQueries.push(baseTitle);
+
+    const noEra = cleanQuery.replace(/\b(?:ad|ce|bc|bce)\b/gi, '').replace(/\s+/g, ' ').trim();
+    if (noEra && noEra !== cleanQuery && !searchQueries.includes(noEra)) searchQueries.push(noEra);
+
+    const firstWord = cleanQuery.split(' ')[0];
+    if (firstWord && firstWord.length >= 4 && !searchQueries.includes(firstWord) && !['the', 'this', 'that', 'with'].includes(firstWord.toLowerCase())) {
+      searchQueries.push(firstWord);
+    }
 
     const ignoreSlugs = ['category', 'tag', 'page', 'disclaimer', 'how-to-download', 'join-our-group', 'request-a-movie', 'dmca', 'search', 'faq', 'about-us', 'contact-us'];
 
@@ -2058,9 +2066,7 @@ var FourKHDHubClient = class {
     this.baseUrl = "https://4khdhub.one";
     this.mirrors = [
       "https://4khdhub.one",
-      "https://4khdhub.dad",
-      "https://4khdhub.top",
-      "https://4khdhub.bond"
+      "https://4khdhub.dad"
     ];
   }
 
@@ -2091,8 +2097,18 @@ var FourKHDHubClient = class {
     const results = [];
     const cleanQuery = query.replace(/[:\-–—]/g, ' ').replace(/\s+/g, ' ').trim();
     const queryPlus = cleanQuery.replace(/\s+/g, '+');
+    const baseTitle = cleanQuery.replace(/\b(19\d{2}|20\d{2})\b/g, '').trim();
     const queries = [cleanQuery];
     if (queryPlus !== cleanQuery) queries.push(queryPlus);
+    if (baseTitle && baseTitle !== cleanQuery) queries.push(baseTitle);
+
+    const noEra = cleanQuery.replace(/\b(?:ad|ce|bc|bce)\b/gi, '').replace(/\s+/g, ' ').trim();
+    if (noEra && noEra !== cleanQuery && !queries.includes(noEra)) queries.push(noEra);
+
+    const firstWord = cleanQuery.split(' ')[0];
+    if (firstWord && firstWord.length >= 4 && !queries.includes(firstWord) && !['the', 'this', 'that', 'with'].includes(firstWord.toLowerCase())) {
+      queries.push(firstWord);
+    }
 
     for (const mirror of this.mirrors) {
       for (const q of queries) {

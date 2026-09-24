@@ -106,6 +106,20 @@ class ExtensionManagerService {
       .replace(/\s+/g, ' ')
       .trim();
 
+    const noEraTitle = cleanTitle
+      .replace(/\b(?:ad|ce|bc|bce)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const mainTitle = cleanTitle
+      .split(/[:\-–—]/)[0]
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const titleWords = cleanTitle.split(/\s+/).filter(w => w.length > 0);
+    const primaryWord = titleWords.length > 1 ? titleWords[0] : '';
+    const twoWords = titleWords.length > 2 ? `${titleWords[0]} ${titleWords[1]}` : '';
+
     const candidateQueries = [];
     if (isTVShow) {
       candidateQueries.push(`${cleanTitle} (Season ${seasonNumber})`);
@@ -118,18 +132,40 @@ class ExtensionManagerService {
         candidateQueries.push(`${digitTitle} (Season ${seasonNumber})`);
         candidateQueries.push(`${digitTitle} Season ${seasonNumber}`);
       }
+      if (mainTitle !== cleanTitle && mainTitle.length >= 3) {
+        candidateQueries.push(`${mainTitle} (Season ${seasonNumber})`);
+        candidateQueries.push(`${mainTitle} Season ${seasonNumber}`);
+        candidateQueries.push(mainTitle);
+      }
       candidateQueries.push(cleanTitle);
       if (digitTitle !== cleanTitle) candidateQueries.push(digitTitle);
+      if (cleanTitle.includes('&')) {
+        candidateQueries.push(cleanTitle.replace(/&/g, 'and').replace(/\s+/g, ' ').trim());
+        candidateQueries.push(cleanTitle.replace(/&/g, ' ').replace(/\s+/g, ' ').trim());
+      }
     } else {
       candidateQueries.push(cleanTitle);
       if (digitTitle !== cleanTitle) candidateQueries.push(digitTitle);
       if (wordTitle !== cleanTitle) candidateQueries.push(wordTitle);
+      if (noEraTitle !== cleanTitle && noEraTitle.length >= 3) candidateQueries.push(noEraTitle);
+      if (mainTitle !== cleanTitle && mainTitle.length >= 3) candidateQueries.push(mainTitle);
       if (targetYear) {
         candidateQueries.push(`${cleanTitle} ${targetYear}`);
         if (digitTitle !== cleanTitle) candidateQueries.push(`${digitTitle} ${targetYear}`);
+        if (mainTitle !== cleanTitle && mainTitle.length >= 3) candidateQueries.push(`${mainTitle} ${targetYear}`);
       }
       if (rootTitle && rootTitle.length > 2 && rootTitle !== cleanTitle) {
         candidateQueries.push(rootTitle);
+      }
+      if (cleanTitle.includes('&')) {
+        candidateQueries.push(cleanTitle.replace(/&/g, 'and').replace(/\s+/g, ' ').trim());
+        candidateQueries.push(cleanTitle.replace(/&/g, ' ').replace(/\s+/g, ' ').trim());
+      }
+      if (twoWords && twoWords.length >= 4 && twoWords !== cleanTitle) {
+        candidateQueries.push(twoWords);
+      }
+      if (primaryWord && primaryWord.length >= 4 && !['the', 'that', 'this', 'with', 'from'].includes(primaryWord.toLowerCase())) {
+        candidateQueries.push(primaryWord);
       }
     }
 

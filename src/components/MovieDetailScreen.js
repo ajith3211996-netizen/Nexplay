@@ -746,8 +746,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     };
     try {
       playerInstance.seekTolerance = {
-        toleranceBefore: 0.0,
-        toleranceAfter: 0.0,
+        toleranceBefore: 5.0,
+        toleranceAfter: 5.0,
       };
     } catch (e) {}
   });
@@ -776,17 +776,22 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
         // Discard stale ticks from pre-seek position until ExoPlayer lands near target seek timestamp (or 8s timeout)
         const hasLandedAtTarget = Math.abs(event.currentTime - pSeek) <= 10.0;
-        const isTimedOut = timeSinceSeek > 4000;
+        const isTimedOut = timeSinceSeek > 5000;
 
         if (!hasLandedAtTarget && !isTimedOut) {
           return;
         }
 
-        // Seek has landed on keyframe or settled! Immediately unblock player & update UI
+        // Seek has landed on keyframe or settled!
         pendingSeekTimeRef.current = null;
         isSeekingRef.current = false;
         setIsBuffering(false);
         isBufferingRef.current = false;
+
+        // If timed out and player didn't land near target, do NOT snap currentTime back to stale position
+        if (!hasLandedAtTarget && isTimedOut && Math.abs(event.currentTime - pSeek) > 15.0) {
+          return;
+        }
       }
 
       currentTimeRef.current = event.currentTime;
@@ -1077,7 +1082,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           episodeNumber: targetEpisodeNum,
           originalLanguage: origLang,
           isIndianRegion: isIndianContent,
-          allowCrossProviderFallback: false
+          allowCrossProviderFallback: true
         });
       } catch (e) {
         console.log(`[MovieDetailScreen] Primary Vega resolution note:`, e?.message || e);
@@ -1147,7 +1152,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
           if (url.toLowerCase().includes('.m3u8')) return true; // HLS is chunk-indexed and natively seekable
           if (url.includes('cloudflarestorage.com') || url.includes('r2.')) return true; // Direct Cloudflare R2 verified seekable stream
-          if (url.includes('googleusercontent.com') || url.includes('video-downloads')) return false; // Google CDN rejects 206
+            if (url.includes('pixeldrain.dev') || url.includes('pixeldrain.com')) return true; // PixelDrain native HTTP 206 stream
+            if (url.includes('googleusercontent.com') || url.includes('video-downloads') || url.includes('gpdl')) return false; // Google CDN rejects 206 // Google CDN rejects 206
           try {
             const controller = new AbortController();
             const timer = setTimeout(() => { try { controller.abort(); } catch (_) {} }, 2500);
@@ -1373,8 +1379,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
         try {
           player.seekTolerance = {
-            toleranceBefore: 0.0,
-            toleranceAfter: 0.0,
+            toleranceBefore: 5.0,
+            toleranceAfter: 5.0,
           };
         } catch (sErr) {}
 
@@ -1550,7 +1556,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           provider: providerValue,
           originalLanguage: origLang,
           isIndianRegion: isIndianContent,
-          allowCrossProviderFallback: false
+          allowCrossProviderFallback: true
         });
 
         if (playable?.qualities && Object.keys(playable.qualities).length > 0) {
@@ -1805,6 +1811,17 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     const cur = (typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0)
       ? currentTimeRef.current
       : ((typeof player?.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0));
+    if (player && typeof player.seekBy === 'function') {
+      try {
+        player.seekBy(secs);
+        const newPos = Math.max(0, cur + secs);
+        currentTimeRef.current = newPos;
+        setCurrentTime(newPos);
+        lastSeekTimestampRef.current = Date.now();
+        resetControlsTimeout();
+        return;
+      } catch (_) {}
+    }
     seekToTimestamp(cur + secs);
   };
 
@@ -1812,6 +1829,17 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     const cur = (typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0)
       ? currentTimeRef.current
       : ((typeof player?.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0));
+    if (player && typeof player.seekBy === 'function') {
+      try {
+        player.seekBy(-secs);
+        const newPos = Math.max(0, cur - secs);
+        currentTimeRef.current = newPos;
+        setCurrentTime(newPos);
+        lastSeekTimestampRef.current = Date.now();
+        resetControlsTimeout();
+        return;
+      } catch (_) {}
+    }
     seekToTimestamp(cur - secs);
   };
 

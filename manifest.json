@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.6",
-  "updatedAt": "2026-09-24T03:30:00.000Z",
-  "commitSha": "35784b0",
+  "version": "1.0.7",
+  "updatedAt": "2026-09-24T14:40:00.000Z",
+  "commitSha": "d4fadad",
   "name": "NexPlay Providers Configuration",
   "description": "Dynamic Over-The-Air scraper and provider definitions for NexPlay & Stitch-Nexplay",
   "providers": {
@@ -11,12 +11,12 @@
       "name": "Server 1 (HDHub4u)",
       "enabled": true,
       "priority": 1,
-      "baseUrl": "https://new5.hdhub4u.cl",
+      "baseUrl": "https://new6.hdhub4u.cl",
       "mirrors": [
+        "https://new6.hdhub4u.cl",
         "https://new5.hdhub4u.cl",
-        "https://hdhub4u.ms",
-        "https://hdhub4u.tv",
-        "https://hdhub4u.bi"
+        "https://hdhub4u.bi",
+        "https://hdhub4u.ms"
       ],
       "headers": {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -37,9 +37,7 @@
       "baseUrl": "https://4khdhub.one",
       "mirrors": [
         "https://4khdhub.one",
-        "https://4khdhub.dad",
-        "https://4khdhub.top",
-        "https://4khdhub.bond"
+        "https://4khdhub.dad"
       ],
       "headers": {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -61,9 +59,9 @@
       "mirrors": [
         "https://new7.movies4u.clinic",
         "https://new8.movies4u.clinic",
+        "https://movies4u.vip",
         "https://movies4u.co",
-        "https://movies4u.clinic",
-        "https://movies4u.vip"
+        "https://movies4u.clinic"
       ],
       "headers": {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
