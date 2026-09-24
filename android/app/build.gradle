@@ -1,3 +1,4 @@
+import groovy.json.JsonSlurper
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
@@ -81,6 +82,26 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+
+def getAppVersionProps() {
+    def versionFile = file("../../version.json")
+    if (versionFile.exists()) {
+        try {
+            return new JsonSlurper().parseText(versionFile.text)
+        } catch (Exception e) {
+            println "Warning: Failed to parse version.json: " + e.message
+        }
+    }
+    return [
+        versionCode: 1080108,
+        versionName: "1.0.8.1.108-bugfix.20260924"
+    ]
+}
+
+def versionProps = getAppVersionProps()
+def baseAppVersionCode = (versionProps.versionCode ?: 1080108) as Integer
+def baseAppVersionName = (versionProps.versionName ?: "1.0.8.1.108-bugfix.20260924") as String
+
 android {
     ndkVersion rootProject.ext.ndkVersion
 
@@ -92,8 +113,8 @@ android {
         applicationId 'com.anonymous.Stitchnexplay'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
+        versionCode baseAppVersionCode
+        versionName baseAppVersionName
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
 

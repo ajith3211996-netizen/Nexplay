@@ -31,7 +31,10 @@ $sharedFiles = @(
     "src\utils\ProviderBundles.js",
     "src\utils\ProviderUpdateManager.js",
     "src\utils\DnsResolver.js",
-    "manifest.json"
+    "manifest.json",
+    "version.json",
+    "version_manager.js",
+    "build_app.ps1"
 )
 
 # Dynamically discover any other utility or test scripts in src/utils
