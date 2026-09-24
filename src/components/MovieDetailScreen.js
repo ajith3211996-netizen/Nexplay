@@ -21,6 +21,7 @@ import {
 import { Ionicons, MaterialCommunityIcons, FontAwesome5, MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { selectOptimalDefaultAudioTrack, getTrackDisplayLabel } from '../utils/AudioTrackSelector';
 import { useEventListener } from 'expo';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as NavigationBar from 'expo-navigation-bar';
@@ -117,27 +118,15 @@ const LANGUAGE_NAMES = {
   'tr': 'Turkish', 'tur': 'Turkish',
 };
 
-const getTrackDisplayLabel = (track, defaultPrefix = 'Track', index = 0) => {
-  if (!track) return `${defaultPrefix} ${index + 1}`;
-  if (track.label && track.label.trim().length > 0 && !track.label.toLowerCase().includes('und')) {
-    return track.label.trim();
-  }
-  const langKey = (track.language || '').toLowerCase().trim();
-  if (langKey && LANGUAGE_NAMES[langKey]) {
-    return LANGUAGE_NAMES[langKey];
-  }
-  if (track.name && track.name.trim().length > 0) {
-    return track.name.trim();
-  }
-  return langKey ? langKey.toUpperCase() : `${defaultPrefix} ${index + 1}`;
-};
+// getTrackDisplayLabel imported from ../utils/AudioTrackSelector
 
 const getDeduplicatedAudioTracks = (tracks = []) => {
   if (!Array.isArray(tracks) || tracks.length === 0) {
     return [{ id: 'default', originalIndex: 0, language: 'en', label: 'Default Audio (Original)', displayLabel: 'Default Audio (Original)', isDefault: true }];
   }
-  return tracks.map((track, idx) => ({
+  return tracks.filter(Boolean).map((track, idx) => ({
     ...track,
+    id: track.id != null ? String(track.id) : `track-${idx}`,
     originalIndex: idx,
     displayLabel: getTrackDisplayLabel(track, 'Audio Track', idx),
   }));
@@ -145,8 +134,9 @@ const getDeduplicatedAudioTracks = (tracks = []) => {
 
 const getDeduplicatedSubtitleTracks = (tracks = []) => {
   if (!Array.isArray(tracks) || tracks.length === 0) return [];
-  return tracks.map((track, idx) => ({
+  return tracks.filter(Boolean).map((track, idx) => ({
     ...track,
+    id: track.id != null ? String(track.id) : `sub-${idx}`,
     originalIndex: idx,
     displayLabel: getTrackDisplayLabel(track, 'Subtitle Track', idx),
   }));
@@ -184,7 +174,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
 
   // Player & Scraper State
-  const [activeServer, setActiveServer] = useState(1);
+  const [activeServer, setActiveServer] = useState(3); // Default to Server 3 (Movies4u / Pixeldrain primary)
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasStartedPlayback, setHasStartedPlayback] = useState(false);
   const [hasFirstFrameRendered, setHasFirstFrameRendered] = useState(false);
@@ -198,6 +188,11 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   const controlsVisibleRef = useRef(true);
   const controlsTimeoutRef = useRef(null);
   const controlsOpacity = useRef(new Animated.Value(1)).current;
+
+  // Playback Engine: Media3 ExoPlayer Exclusive
+  const playbackEngine = 'media3';
+  const playbackEngineRef = useRef('media3');
+  const currentStreamInfoRef = useRef(null);
 
   // VideoView ref & Fullscreen state
   const videoViewRef = useRef(null);
@@ -743,16 +738,16 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     playerInstance.keepScreenOnWhilePlaying = true;
     playerInstance.timeUpdateEventInterval = 0.5;
     playerInstance.bufferOptions = {
-      preferredForwardBufferDuration: 60, // 60s forward lookahead window
-      waitsToMinimizeStalling: true, // Enables Media3 stall minimization for seamless playback (matches VLC)
-      minBufferForPlayback: 1.0, // 2.5s healthy pre-buffer cushion before playback begins (matches VLC network caching)
-      maxBufferBytes: 0, // Unconstrained allocation based on bitrate
+      preferredForwardBufferDuration: 60,
+      waitsToMinimizeStalling: false,
+      minBufferForPlayback: 0.5,
+      maxBufferBytes: 0,
       prioritizeTimeOverSizeThreshold: true,
     };
     try {
       playerInstance.seekTolerance = {
-        toleranceBefore: 5.0,
-            toleranceAfter: 5.0,
+        toleranceBefore: 0.0,
+        toleranceAfter: 0.0,
       };
     } catch (e) {}
   });
@@ -886,6 +881,21 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     if (hasStartedPlayback && !isResolving && !isResolvingRef.current && (currentStatus === 'error')) {
       const errorMsg = event?.error?.message || 'Video stream could not be decoded or is offline.';
       console.warn('[MovieDetailScreen] Player error status detected:', errorMsg);
+
+      // Transient seek recovery: don't abort playback if seeking within the last 5 seconds
+      const timeSinceSeek = Date.now() - (lastSeekTimestampRef.current || 0);
+      if (isSeekingRef.current || timeSinceSeek < 5000) {
+        console.log('[MovieDetailScreen] Transient seek buffering/error ignored, recovering playback at seek timestamp...');
+        setIsBuffering(true);
+        isBufferingRef.current = true;
+        try {
+          if (pendingSeekTimeRef.current !== null && player) {
+            player.currentTime = pendingSeekTimeRef.current;
+            player.play();
+          }
+        } catch (_) {}
+        return;
+      }
 
       // Automatic Quality Fallback: If current quality failed, seamlessly fallback to an alternative available quality
       if (resolvedQualities && typeof resolvedQualities === 'object') {
@@ -1215,8 +1225,16 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
             uri: safeInitialLink,
             headers: videoHeaders,
             useCaching: false, // Direct OkHttpDataSource for unrestricted HTTP 206 byte-range seeking
-        contentType: isHls ? 'hls' : 'auto'
+            contentType: isHls ? 'hls' : 'auto'
           };
+
+          currentStreamInfoRef.current = {
+            streamUrl: safeInitialLink,
+            targetQuality: initialQuality,
+            videoSource
+          };
+
+          
 
           setPlaybackError(null);
           player.pause();
@@ -1329,6 +1347,13 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         contentType: isHls ? 'hls' : 'auto'
       };
 
+      currentStreamInfoRef.current = {
+        streamUrl: safeStreamUrl,
+        targetQuality: targetQ,
+        videoSource
+      };
+
+
       if (typeof player.replaceAsync === 'function') {
         await player.replaceAsync(videoSource);
       } else if (typeof player.replace === 'function') {
@@ -1339,8 +1364,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         try {
           player.bufferOptions = {
             preferredForwardBufferDuration: 60,
-            waitsToMinimizeStalling: true,
-            minBufferForPlayback: 1.0,
+            waitsToMinimizeStalling: false,
+            minBufferForPlayback: 0.5,
             maxBufferBytes: 0,
             prioritizeTimeOverSizeThreshold: true,
           };
@@ -1348,8 +1373,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
         try {
           player.seekTolerance = {
-            toleranceBefore: 5.0,
-            toleranceAfter: 5.0,
+            toleranceBefore: 0.0,
+            toleranceAfter: 0.0,
           };
         } catch (sErr) {}
 
@@ -1390,6 +1415,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
   // Safe Audio Track Switcher (Strictly uses native AudioTrack reference to prevent JNI crash)
   const switchAudioTrack = (track) => {
+    if (!track) return;
+    hasUserManuallySelectedAudioTrack.current = true;
     if (!player) return;
     hasUserManuallySelectedAudioTrack.current = true;
     try {
@@ -1721,6 +1748,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       return;
     }
 
+
     if (player) {
       try {
         if (isPlaying) {
@@ -1746,65 +1774,45 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     resetControlsTimeout();
   };
 
-  const skipForward = () => {
-    if (player) {
-      try {
-        const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : 100000);
-        const cur = (typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0)
-          ? currentTimeRef.current
-          : ((typeof player.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0));
-        const target = Math.min(safeDuration, Math.max(0, cur + 10));
+  // Centralized instant deterministic seek handler for Media3 ExoPlayer
+  const seekToTimestamp = (targetSeconds) => {
+    if (!player) return;
+    const fallbackDuration = details?.runtime ? details.runtime * 60 : 0;
+    const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : fallbackDuration);
+    const target = safeDuration > 0 ? Math.min(safeDuration, Math.max(0, targetSeconds)) : Math.max(0, targetSeconds);
 
-        pendingSeekTimeRef.current = target;
-        isSeekingRef.current = true;
-        setIsBuffering(true);
-        isBufferingRef.current = true;
-        lastSeekTimestampRef.current = Date.now();
-        stallsHistoryRef.current = [];
-        currentTimeRef.current = target;
-        setCurrentTime(target);
+    console.log(`[MovieDetailScreen] ⏩ Direct Seek to: ${target.toFixed(1)}s (Total duration: ${safeDuration.toFixed(1)}s)`);
+    pendingSeekTimeRef.current = target;
+    isSeekingRef.current = true;
+    setIsBuffering(true);
+    isBufferingRef.current = true;
+    lastSeekTimestampRef.current = Date.now();
+    stallsHistoryRef.current = [];
+    currentTimeRef.current = target;
+    setCurrentTime(target);
 
-        console.log(`[MovieDetailScreen] ⏩ skipForward to ${target.toFixed(1)}s`);
-        if (typeof player.seekBy === 'function') {
-          player.seekBy(10);
-        } else {
-          player.currentTime = target;
-        }
-      } catch (e) {
-        console.warn('[MovieDetailScreen] skipForward error:', e);
-      }
+    try {
+      player.currentTime = target;
+      player.play();
+      setIsPlaying(true);
+    } catch (e) {
+      console.warn('[MovieDetailScreen] seekTo error:', e);
     }
     resetControlsTimeout();
   };
 
-  const skipBackward = () => {
-    if (player) {
-      try {
-        const cur = (typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0)
-          ? currentTimeRef.current
-          : ((typeof player.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0));
-        const target = Math.max(0, cur - 10);
+  const skipForward = (secs = 10) => {
+    const cur = (typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0)
+      ? currentTimeRef.current
+      : ((typeof player?.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0));
+    seekToTimestamp(cur + secs);
+  };
 
-        pendingSeekTimeRef.current = target;
-        isSeekingRef.current = true;
-        setIsBuffering(true);
-        isBufferingRef.current = true;
-        lastSeekTimestampRef.current = Date.now();
-        stallsHistoryRef.current = [];
-        currentTimeRef.current = target;
-        setCurrentTime(target);
-
-        console.log(`[MovieDetailScreen] ⏪ skipBackward to ${target.toFixed(1)}s`);
-        if (typeof player.seekBy === 'function') {
-          player.seekBy(-10);
-        } else {
-          player.currentTime = target;
-        }
-      } catch (e) {
-        console.warn('[MovieDetailScreen] skipBackward error:', e);
-      }
-    }
-    resetControlsTimeout();
+  const skipBackward = (secs = 10) => {
+    const cur = (typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0)
+      ? currentTimeRef.current
+      : ((typeof player?.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0));
+    seekToTimestamp(cur - secs);
   };
 
     const changePlaybackSpeed = (speed) => {
@@ -2023,52 +2031,18 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         resetControlsTimeout();
       },
       onPanResponderRelease: (evt, gestureState) => {
-        if (!player || isControlsLockedRef.current) return;
+        if (isControlsLockedRef.current) return;
+        if (!player) return;
         isScrubbingRef.current = false;
-        isSeekingRef.current = true;
-        setIsBuffering(true);
-        isBufferingRef.current = true;
-        lastSeekTimestampRef.current = Date.now();
-        stallsHistoryRef.current = [];
-
-        // Prioritize target seek time: never let an Android release 0-coordinate reset playback!
         const calculated = getScrubberSeekTime(evt, gestureState);
         const targetSeekTime = (calculated > 0) ? calculated : (currentTimeRef.current > 0 ? currentTimeRef.current : 0);
-
-        console.log('[MovieDetailScreen] 🎯 Scrubber released at:', targetSeekTime.toFixed(1), 's');
-        pendingSeekTimeRef.current = targetSeekTime;
-        currentTimeRef.current = targetSeekTime;
-        setCurrentTime(targetSeekTime);
-        try {
-          const cur = typeof player.currentTime === 'number' ? player.currentTime : (currentTime || 0);
-          const diff = targetSeekTime - cur;
-          console.log('[MovieDetailScreen] 🎯 Seeking from', cur.toFixed(1), 'to', targetSeekTime.toFixed(1), 'diff:', diff.toFixed(1));
-          if (typeof player.seekBy === 'function' && Math.abs(diff) > 0.5) {
-            player.seekBy(diff);
-          } else {
-            player.currentTime = targetSeekTime;
-          }
-        } catch (e) {
-          console.warn('[MovieDetailScreen] Scrubber seek error:', e);
-        }
-        resetControlsTimeout();
+        seekToTimestamp(targetSeekTime);
       },
       onPanResponderTerminate: () => {
         if (!player || isControlsLockedRef.current) return;
         isScrubbingRef.current = false;
-        isSeekingRef.current = true;
-        setIsBuffering(true);
-        isBufferingRef.current = true;
-        lastSeekTimestampRef.current = Date.now();
-        stallsHistoryRef.current = [];
-        const targetSeekTime = currentTimeRef.current;
-        pendingSeekTimeRef.current = targetSeekTime;
-        try {
-          player.currentTime = targetSeekTime;
-        } catch (e) {
-          console.warn('[MovieDetailScreen] Scrubber seek error:', e);
-        }
-        resetControlsTimeout();
+        const targetSeekTime = currentTimeRef.current || 0;
+        seekToTimestamp(targetSeekTime);
       }
     })
   ).current;
@@ -2078,23 +2052,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : fallbackDuration);
     if (safeDuration <= 0) return;
     const targetSeekTime = getScrubberSeekTime(event);
-
-    isSeekingRef.current = true;
-    setIsBuffering(true);
-    isBufferingRef.current = true;
-    lastSeekTimestampRef.current = Date.now();
-    stallsHistoryRef.current = [];
-    pendingSeekTimeRef.current = targetSeekTime;
-    currentTimeRef.current = targetSeekTime;
-    setCurrentTime(targetSeekTime);
-    if (player) {
-      try {
-        player.currentTime = targetSeekTime;
-      } catch (e) {
-        console.warn('[MovieDetailScreen] Scrubber seek error:', e);
-      }
-    }
-    resetControlsTimeout();
+    seekToTimestamp(targetSeekTime);
   };
 
   // Dynamic seconds counter and total duration formatter
@@ -2226,21 +2184,23 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         }}
         style={{ width: '100%', height: '100%', backgroundColor: '#000000', position: 'relative', overflow: 'hidden' }}
       >
-        {/* VideoView remains permanently mounted so Android MediaCodec Surface is never detached */}
-        <VideoView
-          ref={videoViewRef}
-          player={player}
-          style={StyleSheet.absoluteFill}
-          contentFit={contentFitMode || 'contain'}
-          surfaceType="textureView"
-          useExoShutter={false}
-          nativeControls={false}
-          onFirstFrameRender={() => {
-            setHasFirstFrameRendered(true);
-            setIsBuffering(false);
-            isBufferingRef.current = false;
-          }}
-        />
+        {/* Playback Engine: Media3 ExoPlayer */}
+        <View style={StyleSheet.absoluteFill}>
+          <VideoView
+            ref={videoViewRef}
+            player={player}
+            style={StyleSheet.absoluteFill}
+            contentFit={contentFitMode || 'contain'}
+            surfaceType="textureView"
+            useExoShutter={false}
+            nativeControls={false}
+            onFirstFrameRender={() => {
+              setHasFirstFrameRendered(true);
+              setIsBuffering(false);
+              isBufferingRef.current = false;
+            }}
+          />
+        </View>
 
         {/* Poster backdrop overlay ONLY while user has not initiated playback */}
         {!hasStartedPlayback && (
@@ -2914,11 +2874,52 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                   </View>
                 </View>
 
-                {/* Dynamic Timestamps */}
+                {/* Dynamic Timestamps & Direct Jump Buttons (10:00 & 20:00) */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: verticalScale(1), paddingHorizontal: scale(2) }}>
                   <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: moderateScale(10.5), fontWeight: '700' }}>
                     {formatTime(currentTime)}
                   </Text>
+
+                  {/* Direct Jump Shortcuts: Jump to 10min / 20min */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: scale(8) }}>
+                    {(duration >= 600 || !duration) && (
+                      <TouchableOpacity
+                        onPress={() => seekToTimestamp(600)}
+                        activeOpacity={0.7}
+                        style={{
+                          backgroundColor: Math.abs(currentTime - 600) < 15 ? '#38bdf8' : 'rgba(255,255,255,0.15)',
+                          paddingHorizontal: scale(8),
+                          paddingVertical: verticalScale(2),
+                          borderRadius: scale(10),
+                          borderWidth: 1,
+                          borderColor: Math.abs(currentTime - 600) < 15 ? '#38bdf8' : 'rgba(255,255,255,0.2)'
+                        }}
+                      >
+                        <Text style={{ color: Math.abs(currentTime - 600) < 15 ? '#000000' : '#ffffff', fontSize: moderateScale(9.5), fontWeight: '700' }}>
+                          10:00
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    {(duration >= 1200 || !duration) && (
+                      <TouchableOpacity
+                        onPress={() => seekToTimestamp(1200)}
+                        activeOpacity={0.7}
+                        style={{
+                          backgroundColor: Math.abs(currentTime - 1200) < 15 ? '#38bdf8' : 'rgba(255,255,255,0.15)',
+                          paddingHorizontal: scale(8),
+                          paddingVertical: verticalScale(2),
+                          borderRadius: scale(10),
+                          borderWidth: 1,
+                          borderColor: Math.abs(currentTime - 1200) < 15 ? '#38bdf8' : 'rgba(255,255,255,0.2)'
+                        }}
+                      >
+                        <Text style={{ color: Math.abs(currentTime - 1200) < 15 ? '#000000' : '#ffffff', fontSize: moderateScale(9.5), fontWeight: '700' }}>
+                          20:00
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
                   <Text style={{ color: '#a1a1aa', fontSize: moderateScale(10.5), fontWeight: '700' }}>
                     {duration > 0 ? formatTime(duration) : '--:--'}
                   </Text>
@@ -3460,61 +3461,65 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
                 {activePlayerMenu === 'quality' && (
                   (() => {
-                    const options = [];
-                    // Always include Auto (ABR) Adaptive Bitrate option at top
-                    options.push({
-                      id: 'auto',
-                      label: 'Auto (Adaptive Bitrate)',
-                      desc: qualityMode === 'auto'
-                        ? `Active • Dynamically adapts (${currentQuality.toUpperCase()})`
-                        : 'Automatically optimizes bitrate & resolution to prevent buffering'
-                    });
-
-                    const qMap = (resolvedQualities && typeof resolvedQualities === 'object') ? resolvedQualities : {};
-                    const standardKeys = [
-                      { key: '4k', label: '4K Ultra HD (2160p)', desc: 'Ultra High Definition Master Stream' },
-                      { key: '1080p', label: 'Full HD (1080p)', desc: 'Crisp High-Speed Master Stream' },
-                      { key: '720p', label: 'HD (720p)', desc: 'Balanced Quality & Speed' }
-                    ];
-
-                    for (const std of standardKeys) {
-                      const hasUrl = qMap[std.key] || qMap[std.key.replace('p', '')] || (std.key === '4k' && (qMap['2160p'] || qMap['2160']));
-                      if (hasUrl) {
-                        const isNowPlaying = (currentQuality.toLowerCase() === std.key || (std.key === '4k' && currentQuality.toLowerCase() === '2160p')) && qualityMode !== 'auto';
-                        options.push({
-                          id: std.key,
-                          label: std.label,
-                          desc: isNowPlaying ? 'Currently Playing (Locked)' : std.desc
-                        });
-                      }
-                    }
-
-                    // Any extra non-standard quality keys in resolvedQualities
-                    Object.keys(qMap).forEach(k => {
-                      const lowerK = k.toLowerCase();
-                      if (!['4k', '2160p', '2160', '1080p', '1080', '720p', '720', '480p', '480', 'auto'].includes(lowerK)) {
-                        const isNowPlaying = currentQuality.toLowerCase() === lowerK && qualityMode !== 'auto';
-                        options.push({
-                          id: k,
-                          label: `${k.toUpperCase()} Quality`,
-                          desc: isNowPlaying ? 'Currently Playing (Locked)' : 'Direct Stream'
-                        });
-                      }
-                    });
-
-                    // If only 1 quality was scraped from the post, display all standard options
-                    if (options.length === 1 && currentEpisode?.videoUrl) {
+                    try {
+                      const safeCurrentQ = (currentQuality || '1080p').toLowerCase();
+                      const options = [];
                       options.push({
-                        id: currentQuality || '1080p',
-                        label: `${(currentQuality || '1080p').toUpperCase()} Stream`,
-                        desc: 'Currently Playing'
+                        id: 'auto',
+                        label: 'Auto (Adaptive Bitrate)',
+                        desc: qualityMode === 'auto'
+                          ? `Active • Dynamically adapts (${safeCurrentQ.toUpperCase()})`
+                          : 'Automatically optimizes bitrate & resolution to prevent buffering'
                       });
+
+                      const qMap = (resolvedQualities && typeof resolvedQualities === 'object') ? resolvedQualities : {};
+                      const standardKeys = [
+                        { key: '4k', label: '4K Ultra HD (2160p)', desc: 'Ultra High Definition Master Stream' },
+                        { key: '1080p', label: 'Full HD (1080p)', desc: 'Crisp High-Speed Master Stream' },
+                        { key: '720p', label: 'HD (720p)', desc: 'Balanced Quality & Speed' }
+                      ];
+
+                      for (const std of standardKeys) {
+                        const hasUrl = qMap[std.key] || qMap[std.key.replace('p', '')] || (std.key === '4k' && (qMap['2160p'] || qMap['2160']));
+                        if (hasUrl) {
+                          const isNowPlaying = (safeCurrentQ === std.key || (std.key === '4k' && safeCurrentQ === '2160p')) && qualityMode !== 'auto';
+                          options.push({
+                            id: std.key,
+                            label: std.label,
+                            desc: isNowPlaying ? 'Currently Playing (Locked)' : std.desc
+                          });
+                        }
+                      }
+
+                      Object.keys(qMap).forEach(k => {
+                        const lowerK = k.toLowerCase();
+                        if (!['4k', '2160p', '2160', '1080p', '1080', '720p', '720', '480p', '480', 'auto'].includes(lowerK)) {
+                          const isNowPlaying = safeCurrentQ === lowerK && qualityMode !== 'auto';
+                          options.push({
+                            id: k,
+                            label: `${k.toUpperCase()} Quality`,
+                            desc: isNowPlaying ? 'Currently Playing (Locked)' : 'Direct Stream'
+                          });
+                        }
+                      });
+
+                      if (options.length === 1 && currentEpisode?.videoUrl) {
+                        options.push({
+                          id: safeCurrentQ,
+                          label: `${safeCurrentQ.toUpperCase()} Stream`,
+                          desc: 'Currently Playing'
+                        });
+                      }
+                      return options;
+                    } catch (e) {
+                      console.warn('[MovieDetailScreen] Error generating quality options:', e);
+                      return [{ id: '1080p', label: '1080p Stream', desc: 'Default Master Stream' }];
                     }
-                    return options;
                   })().map((q) => {
+                    const safeCurrentQ = (currentQuality || '1080p').toLowerCase();
                     const isSelected = qualityMode === 'auto' 
                       ? q.id === 'auto' 
-                      : (q.id !== 'auto' && currentQuality.toLowerCase() === q.id.toLowerCase());
+                      : (q.id !== 'auto' && safeCurrentQ === (q.id || '').toLowerCase());
                     return (
                       <TouchableOpacity
                         key={`in-player-q-${q.id}`}
@@ -3590,38 +3595,47 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                 )}
 
                 {activePlayerMenu === 'audio' && (
-                  getDeduplicatedAudioTracks(availableAudioTracks).map((track, idx) => {
-                    const isSelected = selectedAudioTrack ? (
-                      (typeof selectedAudioTrack.originalIndex === 'number' && typeof track.originalIndex === 'number' && selectedAudioTrack.originalIndex === track.originalIndex) ||
-                      (selectedAudioTrack.id && track.id && selectedAudioTrack.id === track.id)
-                    ) : (idx === 0);
-                    return (
-                      <TouchableOpacity
-                        key={`in-player-audio-${track.id || track.originalIndex || idx}`}
-                        onPress={() => switchAudioTrack(track)}
-                        activeOpacity={0.8}
-                        style={{
-                          paddingVertical: verticalScale(8),
-                          paddingHorizontal: scale(10),
-                          borderRadius: scale(8),
-                          marginBottom: verticalScale(6),
-                          flexDirection: 'row',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          backgroundColor: isSelected ? 'rgba(56, 189, 248, 0.22)' : 'rgba(24, 24, 27, 0.85)',
-                          borderWidth: 1,
-                          borderColor: isSelected ? '#38bdf8' : 'rgba(255, 255, 255, 0.08)'
-                        }}
-                      >
-                        <Text style={{ fontSize: moderateScale(11.5), color: isSelected ? '#38bdf8' : '#ffffff', fontWeight: isSelected ? '800' : '600' }}>
-                          {track.displayLabel || track.label || track.name || `Audio Track ${idx + 1}`}
-                        </Text>
-                        {isSelected && (
-                          <Ionicons name="checkmark-circle" size={scale(14)} color="#38bdf8" />
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })
+                  availableAudioTracks.length === 0 ? (
+                    <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: verticalScale(16) }}>
+                      <ActivityIndicator size="small" color="#38bdf8" />
+                      <Text style={{ color: '#94a3b8', fontSize: moderateScale(11), marginTop: verticalScale(8) }}>
+                        Scanning audio streams...
+                      </Text>
+                    </View>
+                  ) : (
+                    getDeduplicatedAudioTracks(availableAudioTracks).map((track, idx) => {
+                      const isSelected = selectedAudioTrack ? (
+                        (selectedAudioTrack.id != null && track.id != null && String(selectedAudioTrack.id) === String(track.id)) ||
+                        (typeof selectedAudioTrack.originalIndex === 'number' && typeof track.originalIndex === 'number' && selectedAudioTrack.originalIndex === track.originalIndex)
+                      ) : (idx === 0);
+                      return (
+                        <TouchableOpacity
+                          key={`in-player-audio-${track.id || track.originalIndex || idx}`}
+                          onPress={() => switchAudioTrack(track)}
+                          activeOpacity={0.8}
+                          style={{
+                            paddingVertical: verticalScale(8),
+                            paddingHorizontal: scale(10),
+                            borderRadius: scale(8),
+                            marginBottom: verticalScale(6),
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            backgroundColor: isSelected ? 'rgba(56, 189, 248, 0.22)' : 'rgba(24, 24, 27, 0.85)',
+                            borderWidth: 1,
+                            borderColor: isSelected ? '#38bdf8' : 'rgba(255, 255, 255, 0.08)'
+                          }}
+                        >
+                          <Text style={{ fontSize: moderateScale(11.5), color: isSelected ? '#38bdf8' : '#ffffff', fontWeight: isSelected ? '800' : '600' }}>
+                            {track.displayLabel || track.label || track.name || `Audio Track ${idx + 1}`}
+                          </Text>
+                          {isSelected && (
+                            <Ionicons name="checkmark-circle" size={scale(14)} color="#38bdf8" />
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })
+                  )
                 )}
 
                 {activePlayerMenu === 'subtitles' && (
@@ -3653,7 +3667,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                     {getDeduplicatedSubtitleTracks(availableSubtitleTracks).map((track, idx) => {
                       const isSelected = selectedSubtitleTrack && (
                         (typeof selectedSubtitleTrack.originalIndex === 'number' && typeof track.originalIndex === 'number' && selectedSubtitleTrack.originalIndex === track.originalIndex) ||
-                        (selectedSubtitleTrack.id && track.id && selectedSubtitleTrack.id === track.id)
+                        (selectedSubtitleTrack.id != null && track.id != null && String(selectedSubtitleTrack.id) === String(track.id))
                       );
                       return (
                         <TouchableOpacity

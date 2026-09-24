@@ -1,5 +1,5 @@
+import { Movies4u } from './Movies4uProvider.js';
 import { 
-  Movies4u,
   HDHub4u, 
   FourKHDHub, 
   UniversalScraper, 
@@ -434,12 +434,11 @@ class ExtensionManagerService {
         );
 
         if (playable && playable.streamUrl) {
-          const isGoogleCdn = (playable.streamUrl || '').includes('googleusercontent.com') || (playable.streamUrl || '').includes('video-downloads');
+          const isGoogleCdn = (playable.streamUrl || '').includes('googleusercontent.com') || (playable.streamUrl || '').includes('video-downloads') || (playable.streamUrl || '').includes('gpdl');
           if (isGoogleCdn) {
-            console.log(`[ExtensionManager] ⚠️ Strictly rejecting Google CDN stream from ${matchedProvider}`);
-            continue;
+            console.log(`[ExtensionManager] Utilizing [Server:10Gbps] Google CDN fallback stream from ${matchedProvider}`);
           }
-          const supports206 = playable.supports206 ?? true;
+          const supports206 = playable.supports206 ?? !isGoogleCdn;
           const serverLabel = matchedProvider === 'movies4u' ? 'Server 3 (Movies4u)' : (matchedProvider === '4khdhub' ? 'Server 2 (4KHDHub)' : 'Server 1 (HDHub4u)');
           
           // Strictly default playback to 1080p if available among resolved stream qualities
@@ -447,11 +446,17 @@ class ExtensionManagerService {
           delete qualities['480p'];
           delete qualities['480'];
           delete qualities['sd'];
-          for (const [k, v] of Object.entries(qualities)) {
-            if (v && (v.includes('googleusercontent.com') || v.includes('video-downloads'))) {
-              delete qualities[k];
+
+          // If range-supporting streams exist, prioritize non-Google CDN; otherwise keep Google CDN fallback
+          const hasNonGoogleCdn = Object.values(qualities).some(v => v && !v.includes('googleusercontent.com') && !v.includes('video-downloads'));
+          if (hasNonGoogleCdn) {
+            for (const [k, v] of Object.entries(qualities)) {
+              if (v && (v.includes('googleusercontent.com') || v.includes('video-downloads'))) {
+                delete qualities[k];
+              }
             }
           }
+
           const qualitySizes = { ...(playable.qualitySizes || {}) };
           delete qualitySizes['480p'];
           delete qualitySizes['480'];
@@ -460,7 +465,7 @@ class ExtensionManagerService {
           const primaryStreamUrl = has1080 ? qualities['1080p'] : playable.streamUrl;
           const primaryQuality = has1080 ? '1080p' : (playable.quality || '1080p');
 
-          if (!primaryStreamUrl || primaryStreamUrl.includes('googleusercontent.com') || primaryStreamUrl.includes('video-downloads')) {
+          if (!primaryStreamUrl) {
             continue;
           }
 
@@ -480,7 +485,7 @@ class ExtensionManagerService {
             subtitles: playable.subtitles || []
           };
 
-          if (!supports206) {
+          if (!supports206 && !isGoogleCdn) {
             continue;
           }
 
@@ -509,8 +514,8 @@ class ExtensionManagerService {
             provider: alt,
             allowCrossProviderFallback: false
           });
-          if (altResult && altResult.supports206 !== false && !altResult.streamUrl.includes('googleusercontent.com') && !altResult.streamUrl.includes('video-downloads')) {
-            console.log(`[ExtensionManager] ✅ Alternative provider ${alt} resolved range-supporting stream: [${altResult.server}]!`);
+          if (altResult && (altResult.supports206 !== false || (altResult.streamUrl && altResult.streamUrl.includes('googleusercontent.com')))) {
+            console.log(`[ExtensionManager] ✅ Alternative provider ${alt} resolved stream: [${altResult.server}]!`);
             return altResult;
           }
         } catch (_) {}

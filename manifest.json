@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.4",
-  "updatedAt": "2026-09-20T08:53:36.697Z",
-  "commitSha": "f572b3c",
+  "version": "1.0.6",
+  "updatedAt": "2026-09-24T03:30:00.000Z",
+  "commitSha": "35784b0",
   "name": "NexPlay Providers Configuration",
   "description": "Dynamic Over-The-Air scraper and provider definitions for NexPlay & Stitch-Nexplay",
   "providers": {
@@ -57,9 +57,10 @@
       "name": "Server 3 (Movies4u)",
       "enabled": true,
       "priority": 3,
-      "baseUrl": "https://new6.movies4u.clinic",
+      "baseUrl": "https://new7.movies4u.clinic",
       "mirrors": [
-        "https://new6.movies4u.clinic",
+        "https://new7.movies4u.clinic",
+        "https://new8.movies4u.clinic",
         "https://movies4u.co",
         "https://movies4u.clinic",
         "https://movies4u.vip"
@@ -88,7 +89,7 @@
     "Always scrape all qualities (480p, 720p, 1080p, 4K) concurrently and post to ExoPlayer qualities map",
     "Strict WEB-DL exclusivity over WEBRip for Server 1 (HDHub4u) and Server 2 (4KHDHub)",
     "Instant 0ms programmatic Greenmotors timer countdown bypass via 5-step token decryption",
-    "Strictly ignore Server : 10Gbps button holding Google CDN across all providers (Server 1 HDHub4u, Server 2 4KHDHub, Server 3 Movies4u), ensuring 100% range-seekable streams (FSL, FSLv2, PixelDrain, Watch Online)",
+    "Strictly prioritize verified HTTP 206 streams: FSL Server (primary) -> FSLv2 Server (secondary) -> PixelDrain (third), falling back to Server : 10Gbps (Google CDN) only if none of the top 3 are available",
     "Strictly eliminate 480p and default to 1080p playback across all providers"
   ]
 }
