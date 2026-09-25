@@ -2,14 +2,22 @@
   "major": 1,
   "minor": 1,
   "patch": 8,
-  "issue": 6,
-  "build": 119,
+  "issue": 7,
+  "build": 120,
   "updateType": "bugfix",
   "timestamp": "20260925",
-  "versionName": "1.1.8.6.119-bugfix.20260925",
-  "versionCode": 1180119,
-  "lastSuccessfulBuild": "2026-09-25T19:19:12.268Z",
+  "versionName": "1.1.8.7.120-bugfix.20260925",
+  "versionCode": 1180120,
+  "lastSuccessfulBuild": "2026-09-25T20:15:06.832Z",
   "history": [
+    {
+      "versionName": "1.1.8.7.120-bugfix.20260925",
+      "versionCode": 1180120,
+      "updateType": "bugfix",
+      "build": 120,
+      "note": "Retain SurfaceTexture across minimize/maximize to eliminate video blackscreen",
+      "builtAt": "2026-09-25T20:15:06.832Z"
+    },
     {
       "versionName": "1.1.8.6.119-bugfix.20260925",
       "versionCode": 1180119,

@@ -1,4 +1,4 @@
-# build_app.ps1
+﻿# build_app.ps1
 # Automated NexPlay Build & Multi-Architecture Compiler
 # Compiles 3 APKs: Universal, 32-bit (armeabi-v7a), and 64-bit (arm64-v8a)
 # Auto-updates lengthy version format on successful builds based on update type (bug, issue, minor, major, build)
@@ -60,6 +60,14 @@ $stagedVersionCode = $versionData.versionCode
 Write-Host "Staged Version Name: $stagedVersionName" -ForegroundColor Green
 Write-Host "Staged Version Code: $stagedVersionCode" -ForegroundColor Green
 Write-Host ""
+
+# Ensure VLCPlayerView native patch is applied
+$vlcPatch = Join-Path $stitchPath "android\vlc_patch\VLCPlayerView.kt"
+$vlcTarget = Join-Path $stitchPath "node_modules\@lunarr\vlc-player\android\src\main\java\com\lunarr\vlcplayer\VLCPlayerView.kt"
+if ((Test-Path $vlcPatch) -and (Test-Path (Split-Path $vlcTarget -Parent))) {
+    Copy-Item $vlcPatch $vlcTarget -Force
+    Write-Host "Applied custom VLCPlayerView native patch." -ForegroundColor Green
+}
 
 # Step 2: Compile the 3 APKs via Gradle
 $buildTypeCap = (Get-Culture).TextInfo.ToTitleCase($BuildType.ToLower())
@@ -204,3 +212,4 @@ Write-Host ""
 Write-Host "===============================================================" -ForegroundColor Green
 Write-Host "   NEXPLAY COMPILE, VERSION UPDATE & DEPLOYMENT COMPLETE!      " -ForegroundColor Green
 Write-Host "===============================================================" -ForegroundColor Green
+
