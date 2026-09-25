@@ -1,3 +1,4 @@
+import appVersionData from '../../version.json';
 import React, { useState, useEffect } from 'react';
 import { 
   View, 
@@ -460,7 +461,7 @@ export default function AccountScreen({ onPlayOffline }) {
       <View style={styles.infoCard}>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>App Version</Text>
-          <Text style={styles.infoValue}>1.0.0 (Release Universal)</Text>
+          <Text style={styles.infoValue}>{appVersionData?.versionName || '1.0.8'} ({appVersionData?.updateType || 'Release'})</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Supported ABIs</Text>

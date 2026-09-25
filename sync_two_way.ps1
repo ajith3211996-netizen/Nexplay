@@ -31,6 +31,8 @@ $sharedFiles = @(
     "src\utils\ProviderBundles.js",
     "src\utils\ProviderUpdateManager.js",
     "src\utils\DnsResolver.js",
+    "src\utils\AudioTrackSelector.js",
+    "src\utils\PlayerSettingsController.js",
     "manifest.json",
     "version.json",
     "version_manager.js",

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   View, 
   Text, 
@@ -20,12 +20,12 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5, MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import VLCPlayerView, { VLCHardwareDecoder } from '@lunarr/vlc-player';
 import { selectOptimalDefaultAudioTrack, getTrackDisplayLabel } from '../utils/AudioTrackSelector';
-import { useEventListener } from 'expo';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as Brightness from 'expo-brightness';
+import { useKeepAwake, activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { scale, verticalScale, moderateScale } from '../utils/responsive';
 import { 
@@ -128,18 +128,28 @@ const getDeduplicatedAudioTracks = (tracks = []) => {
     ...track,
     id: track.id != null ? String(track.id) : `track-${idx}`,
     originalIndex: idx,
-    displayLabel: getTrackDisplayLabel(track, 'Audio Track', idx),
+    displayLabel: getTrackDisplayLabel(track, 'Audio Track', idx, tracks),
   }));
+};
+
+const isSubtitleDisableTrack = (s) => {
+  if (!s) return true;
+  const idNum = Number(s.id ?? s.trackId);
+  if (idNum === -1) return true;
+  const name = String(s.name || s.label || s.language || s.displayLabel || '').trim().toLowerCase();
+  return name === 'disable' || name === 'disabled' || name === 'none';
 };
 
 const getDeduplicatedSubtitleTracks = (tracks = []) => {
   if (!Array.isArray(tracks) || tracks.length === 0) return [];
-  return tracks.filter(Boolean).map((track, idx) => ({
-    ...track,
-    id: track.id != null ? String(track.id) : `sub-${idx}`,
-    originalIndex: idx,
-    displayLabel: getTrackDisplayLabel(track, 'Subtitle Track', idx),
-  }));
+  return tracks
+    .filter(track => track && !isSubtitleDisableTrack(track))
+    .map((track, idx) => ({
+      ...track,
+      id: track.id != null ? String(track.id) : `sub-${idx}`,
+      originalIndex: idx,
+      displayLabel: getTrackDisplayLabel(track, 'Subtitle Track', idx),
+    }));
 };
 
 export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
@@ -175,6 +185,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
   // Player & Scraper State
   const [activeServer, setActiveServer] = useState(3); // Default to Server 3 (Movies4u / Pixeldrain primary)
+  const lastPlayedServerRef = useRef(3);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasStartedPlayback, setHasStartedPlayback] = useState(false);
   const [hasFirstFrameRendered, setHasFirstFrameRendered] = useState(false);
@@ -189,9 +200,9 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   const controlsTimeoutRef = useRef(null);
   const controlsOpacity = useRef(new Animated.Value(1)).current;
 
-  // Playback Engine: Media3 ExoPlayer Exclusive
-  const playbackEngine = 'media3';
-  const playbackEngineRef = useRef('media3');
+  // Playback Engine: in-app libvlc (Native VLC Media Player Exclusive)
+  const playbackEngine = 'vlc';
+  const playbackEngineRef = useRef('vlc');
   const currentStreamInfoRef = useRef(null);
 
   // VideoView ref & Fullscreen state
@@ -270,6 +281,11 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   const openPlayerMenu = (menuType) => {
     if (controlsTimeoutRef.current) {
       clearTimeout(controlsTimeoutRef.current);
+    }
+    if (menuType === 'audio' || menuType === 'subtitles') {
+      try {
+        vlcPlayerRef.current?.getTracks();
+      } catch (e) {}
     }
     setActivePlayerMenu(menuType);
     setControlsVisible(true);
@@ -356,6 +372,20 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
   // Lifecycle safety ref to prevent async crashes on unmounted player
   const isMounted = useRef(true);
+  const lastSavedSeekTimeRef = useRef(0);
+  useKeepAwake();
+
+  // Keep screen on during active playback
+  useEffect(() => {
+    if (isPlaying && hasStartedPlayback) {
+      activateKeepAwakeAsync('NexPlayPlaybackWakeLock').catch(() => {});
+    } else {
+      deactivateKeepAwake('NexPlayPlaybackWakeLock').catch(() => {});
+    }
+    return () => {
+      deactivateKeepAwake('NexPlayPlaybackWakeLock').catch(() => {});
+    };
+  }, [isPlaying, hasStartedPlayback]);
   useEffect(() => {
     isMounted.current = true;
     return () => {
@@ -363,14 +393,11 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       if (controlsTimeoutRef.current) {
         clearTimeout(controlsTimeoutRef.current);
       }
-      if (player) {
-        try {
-          player.pause();
-          player.replace(null);
-        } catch (e) {}
-      }
+      try {
+        vlcPlayerRef.current?.pause();
+      } catch (e) {}
     };
-  }, [player]);
+  }, []);
 
   // Initialize and track system brightness
   useEffect(() => {
@@ -548,35 +575,33 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
   // Audio Track selection tracking (Default English for Hollywood / English titles)
   const hasUserManuallySelectedAudioTrack = useRef(false);
-  const hasAutoSelectedEnglish = useRef(false);
+  const hasAutoSelectedDefaultAudio = useRef(false);
 
-  const applyDefaultEnglishIfHollywood = (tracks) => {
-    if (!tracks || !Array.isArray(tracks) || tracks.length <= 1) return;
+  const applyDefaultAudioTrack = (tracks) => {
+    if (!tracks || !Array.isArray(tracks) || tracks.length === 0) return;
     if (hasUserManuallySelectedAudioTrack.current) return;
-    if (hasAutoSelectedEnglish.current) return;
+    if (hasAutoSelectedDefaultAudio.current) return;
 
-    const origLang = (movie?.original_language || details?.original_language || '').toLowerCase();
-    // Default to English for English/Hollywood/International movies and series
-    const isEnglishMedia = !origLang || origLang === 'en' || !['hi', 'ta', 'te', 'ml', 'kn', 'bn', 'mr', 'pa'].includes(origLang);
+    // Use TMDB API metadata for officially released language
+    const optimalTrack = selectOptimalDefaultAudioTrack(tracks, {
+      ...details,
+      ...movie,
+      original_language: details?.original_language || movie?.original_language,
+      origin_country: details?.origin_country || movie?.origin_country,
+      spoken_languages: details?.spoken_languages || movie?.spoken_languages,
+      production_countries: details?.production_countries || movie?.production_countries,
+    });
 
-    if (isEnglishMedia) {
-      const englishTrack = tracks.find((t) => {
-        const lang = (t.language || '').toLowerCase().trim();
-        const label = (t.label || '').toLowerCase().trim();
-        const name = (t.name || '').toLowerCase().trim();
-        return lang === 'en' || lang === 'eng' || label.includes('english') || name.includes('english') || label.includes('eng') || name.includes('eng');
-      });
-
-      if (englishTrack && player) {
-        try {
-          console.log('[MovieDetailScreen] 🇺🇸 Auto-selecting English default audio track for Hollywood title:', englishTrack);
-          hasAutoSelectedEnglish.current = true;
-          player.audioTrack = englishTrack;
-          setSelectedAudioTrack(englishTrack);
-          player.play();
-        } catch (err) {
-          console.warn('[MovieDetailScreen] Auto-select English error:', err);
-        }
+    if (optimalTrack) {
+      console.log('[MovieDetailScreen] Auto-selected optimal audio track based on TMDB metadata:', optimalTrack);
+      hasAutoSelectedDefaultAudio.current = true;
+      setSelectedAudioTrack(optimalTrack);
+      selectedAudioTrackRef.current = optimalTrack;
+      const tId = typeof optimalTrack.trackId === 'number'
+        ? optimalTrack.trackId
+        : (typeof optimalTrack.id === 'number' ? optimalTrack.id : parseInt(optimalTrack.id, 10));
+      if (!isNaN(tId) && tId !== -1) {
+        vlcPlayerRef.current?.selectAudioTrack(tId);
       }
     }
   };
@@ -729,28 +754,137 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     }
   };
 
-  // Initialize expo-video player (AndroidX Media3 ExoPlayer)
-  const player = useVideoPlayer(null, (playerInstance) => {
-    playerInstance.loop = false; // Never loop video to 0 on seek/end
-    playerInstance.muted = isMuted;
-    playerInstance.preservesPitch = true;
-    playerInstance.playbackRate = 1.0;
-    playerInstance.keepScreenOnWhilePlaying = true;
-    playerInstance.timeUpdateEventInterval = 0.5;
-    playerInstance.bufferOptions = {
-      preferredForwardBufferDuration: 60,
-      waitsToMinimizeStalling: false,
-      minBufferForPlayback: 0.5,
-      maxBufferBytes: 0,
-      prioritizeTimeOverSizeThreshold: true,
+  // Reference to native VLCPlayerView instance & active stream URI
+  const vlcPlayerRef = useRef(null);
+  const [currentSourceUri, setCurrentSourceUri] = useState(null);
+  const isPlayingRef = useRef(false);
+  const durationRef = useRef(0);
+  const isMutedRef = useRef(false);
+  const availableAudioTracksRef = useRef([]);
+  const selectedAudioTrackRef = useRef(null);
+  const availableSubtitleTracksRef = useRef([]);
+  const selectedSubtitleTrackRef = useRef(null);
+
+  // Sync state to refs for player adapter
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { durationRef.current = duration; }, [duration]);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { availableAudioTracksRef.current = availableAudioTracks; }, [availableAudioTracks]);
+  useEffect(() => { selectedAudioTrackRef.current = selectedAudioTrack; }, [selectedAudioTrack]);
+  useEffect(() => { availableSubtitleTracksRef.current = availableSubtitleTracks; }, [availableSubtitleTracks]);
+  useEffect(() => { selectedSubtitleTrackRef.current = selectedSubtitleTrack; }, [selectedSubtitleTrack]);
+
+  // Stable memoized VLC Source (prevents player recreation across component re-renders)
+  const vlcSource = useMemo(() => {
+    if (!currentSourceUri) return undefined;
+    return {
+      uri: currentSourceUri,
+      hwDecoderEnabled: VLCHardwareDecoder.Automatic,
+      mediaOptions: [
+        ':network-caching=300',
+        ':live-caching=300',
+        ':file-caching=300',
+        ':clock-jitter=0',
+        ':clock-synchro=0',
+        ':no-stats'
+      ],
+      initOptions: [
+        '--drop-late-frames',
+        '--skip-frames',
+        '--no-sub-autodetect-file',
+        '--no-stats',
+        '--network-caching=300',
+        '--ipv4-timeout=1500'
+      ]
     };
-    try {
-      playerInstance.seekTolerance = {
-        toleranceBefore: 5.0,
-        toleranceAfter: 5.0,
-      };
-    } catch (e) {}
-  });
+  }, [currentSourceUri]);
+
+  // Unified player interface adapter for VLC (Seamlessly bridges all existing controls)
+  const player = useMemo(() => ({
+    play: () => {
+      setIsPlaying(true);
+      isPlayingRef.current = true;
+      vlcPlayerRef.current?.play();
+    },
+    pause: () => {
+      setIsPlaying(false);
+      isPlayingRef.current = false;
+      vlcPlayerRef.current?.pause();
+    },
+    seekTo: (sec) => {
+      seekToTimestamp(sec);
+    },
+    seekBy: (sec) => {
+      const cur = currentTimeRef.current || 0;
+      seekToTimestamp(cur + sec);
+    },
+    get currentTime() {
+      return currentTimeRef.current || 0;
+    },
+    set currentTime(sec) {
+      seekToTimestamp(sec);
+    },
+    get duration() {
+      return durationRef.current || 0;
+    },
+    get playing() {
+      return isPlayingRef.current;
+    },
+    get status() {
+      return 'readyToPlay';
+    },
+    set muted(val) {
+      setIsMuted(Boolean(val));
+    },
+    get muted() {
+      return isMutedRef.current;
+    },
+    set playbackRate(rate) {
+      setPlaybackSpeed(rate);
+    },
+    get availableAudioTracks() {
+      return availableAudioTracksRef.current;
+    },
+    get audioTrack() {
+      return selectedAudioTrackRef.current;
+    },
+    set audioTrack(track) {
+      switchAudioTrack(track);
+    },
+    get availableSubtitleTracks() {
+      return availableSubtitleTracksRef.current;
+    },
+    get subtitleTrack() {
+      return selectedSubtitleTrackRef.current;
+    },
+    set subtitleTrack(track) {
+      switchSubtitleTrack(track);
+    },
+    replace: (src) => {
+      const uri = typeof src === 'string' ? src : (src?.uri || null);
+      console.log('[MovieDetailScreen] VLC replacing source with:', uri);
+      setCurrentSourceUri(uri);
+      if (uri) {
+        setIsPlaying(true);
+        isPlayingRef.current = true;
+        setHasFirstFrameRendered(false);
+        setIsBuffering(true);
+        isBufferingRef.current = true;
+      }
+    },
+    replaceAsync: async (src) => {
+      const uri = typeof src === 'string' ? src : (src?.uri || null);
+      console.log('[MovieDetailScreen] VLC replaceAsync source with:', uri);
+      setCurrentSourceUri(uri);
+      if (uri) {
+        setIsPlaying(true);
+        isPlayingRef.current = true;
+        setHasFirstFrameRendered(false);
+        setIsBuffering(true);
+        isBufferingRef.current = true;
+      }
+    }
+  }), []);
 
   // Derived player buffering state (active during active seek, initial load, or when stalled and NOT playing)
   const isBufferingState = Boolean(
@@ -760,221 +894,19 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     (
       isSeekingRef.current ||
       !hasFirstFrameRendered ||
-      (isBuffering && (!player || !player.playing))
+      (isBuffering && !isPlaying)
     )
   );
 
-  // Dynamically listen to timeUpdate events from Media3 ExoPlayer
-  useEventListener(player, 'timeUpdate', (event) => {
-    if (event && typeof event.currentTime === 'number' && !isNaN(event.currentTime)) {
-      if (isScrubbingRef.current) return;
 
-      const now = Date.now();
-      if (pendingSeekTimeRef.current !== null) {
-        const pSeek = pendingSeekTimeRef.current;
-        const timeSinceSeek = now - lastSeekTimestampRef.current;
-
-        // Discard stale ticks from pre-seek position until ExoPlayer lands near target seek timestamp (or 8s timeout)
-        const hasLandedAtTarget = Math.abs(event.currentTime - pSeek) <= 10.0;
-        const isTimedOut = timeSinceSeek > 5000;
-
-        if (!hasLandedAtTarget && !isTimedOut) {
-          return;
-        }
-
-        // Seek has landed on keyframe or settled!
-        pendingSeekTimeRef.current = null;
-        isSeekingRef.current = false;
-        setIsBuffering(false);
-        isBufferingRef.current = false;
-
-        // If timed out and player didn't land near target, do NOT snap currentTime back to stale position
-        if (!hasLandedAtTarget && isTimedOut && Math.abs(event.currentTime - pSeek) > 15.0) {
-          return;
-        }
-      }
-
-      currentTimeRef.current = event.currentTime;
-      if (event.currentTime > 0.01) {
-        setHasFirstFrameRendered(true);
-        if (isBufferingRef.current) {
-          setIsBuffering(false);
-          isBufferingRef.current = false;
-        }
-      }
-
-      // Always update currentTime state when controls are visible or seeking just completed
-      if (controlsVisibleRef.current || !isSeekingRef.current) {
-        setCurrentTime(event.currentTime);
-      }
-
-      // Track playback progression
-      if (Math.abs(event.currentTime - lastPlaybackPositionRef.current) > 0.2) {
-        lastPlaybackPositionRef.current = event.currentTime;
-        lastProgressTimestampRef.current = now;
-        if (isBufferingRef.current) {
-          setIsBuffering(false);
-          isBufferingRef.current = false;
-        }
-      }
-    }
-    if (player && player.duration && player.duration > 0 && player.duration !== duration) {
-      setDuration(player.duration);
-    }
-  });
-
-  // Dynamically listen to play/pause state changes
-  useEventListener(player, 'playingChange', (event) => {
-    const isNowPlaying = event && typeof event.isPlaying === 'boolean' ? event.isPlaying : (player ? player.playing : false);
-    setIsPlaying(isNowPlaying);
-    if (isNowPlaying) {
-      setHasFirstFrameRendered(true);
-    } else {
-      setIsBuffering(false);
-      isBufferingRef.current = false;
-    }
-  });
-
-  // Dynamically listen to status changes (e.g. readyToPlay, loading, error)
-  useEventListener(player, 'statusChange', (event) => {
-    const currentStatus = event?.status || (player ? player.status : null);
-
-    if (currentStatus === 'readyToPlay') {
-      setHasFirstFrameRendered(true);
-      pendingSeekTimeRef.current = null;
-      isSeekingRef.current = false;
-      setIsBuffering(false);
-      isBufferingRef.current = false;
-
-      if (hasStartedPlayback) {
-        try {
-          player.play();
-          setIsPlaying(true);
-        } catch (e) {}
-      } else {
-        setIsPlaying(player.playing);
-      }
-      try {
-        if (player.availableAudioTracks && player.availableAudioTracks.length > 0) {
-          setAvailableAudioTracks(player.availableAudioTracks);
-          applyDefaultEnglishIfHollywood(player.availableAudioTracks);
-        }
-        if (player.audioTrack) {
-          setSelectedAudioTrack(player.audioTrack);
-        }
-        if (player.availableSubtitleTracks && player.availableSubtitleTracks.length > 0) {
-          setAvailableSubtitleTracks(player.availableSubtitleTracks);
-        }
-        if (player.subtitleTrack) {
-          setSelectedSubtitleTrack(player.subtitleTrack);
-        }
-      } catch (trackErr) {}
-    }
-
-    // Handle buffering state: only set isBuffering if not yet rendered or stalled while not playing
-    if (currentStatus === 'loading') {
-      if (hasStartedPlayback && !isResolving && (!hasFirstFrameRendered || (player && !player.playing))) {
-        setIsBuffering(true);
-        isBufferingRef.current = true;
-      }
-      if (isPlaying && hasStartedPlayback && !isResolving) {
-        stallsHistoryRef.current = [];
-      }
-    }
-
-    // Strictly only trigger playback error if user started playback AND scraping is finished and not resolving
-    if (hasStartedPlayback && !isResolving && !isResolvingRef.current && (currentStatus === 'error')) {
-      const errorMsg = event?.error?.message || 'Video stream could not be decoded or is offline.';
-      console.warn('[MovieDetailScreen] Player error status detected:', errorMsg);
-
-      // Transient seek recovery: don't abort playback if seeking within the last 5 seconds
-      const timeSinceSeek = Date.now() - (lastSeekTimestampRef.current || 0);
-      if (isSeekingRef.current || timeSinceSeek < 5000) {
-        console.log('[MovieDetailScreen] Transient seek buffering/error ignored, recovering playback at seek timestamp...');
-        setIsBuffering(true);
-        isBufferingRef.current = true;
-        try {
-          if (pendingSeekTimeRef.current !== null && player) {
-            player.currentTime = pendingSeekTimeRef.current;
-            player.play();
-          }
-        } catch (_) {}
-        return;
-      }
-
-      // Automatic Quality Fallback: If current quality failed, seamlessly fallback to an alternative available quality
-      if (resolvedQualities && typeof resolvedQualities === 'object') {
-        const availableKeys = Object.keys(resolvedQualities).filter(k => k.toLowerCase() !== currentQuality.toLowerCase() && resolvedQualities[k]);
-        if (availableKeys.length > 0) {
-          const nextQuality = availableKeys.find(k => k.includes('720')) || availableKeys.find(k => k.includes('4k')) || availableKeys[0];
-          const nextUrl = resolvedQualities[nextQuality];
-          if (nextUrl) {
-            console.log(`[MovieDetailScreen] 🔄 Playback error on ${currentQuality}. Auto-switching to alternative quality: ${nextQuality}`);
-            showAbrToast(`🔄 Auto-switching to ${nextQuality.toUpperCase()} stream`);
-            playResolvedLink(nextUrl, nextQuality, false);
-            return;
-          }
-        }
-      }
-
-      try {
-        if (player) {
-          player.pause();
-          player.replace(null);
-        }
-      } catch (e) {}
-      setPlaybackError({
-        title: 'Stream Playback Error',
-        message: 'The video stream could not be played or is currently unavailable. Please try switching servers or retry.'
-      });
-      setIsPlaying(false);
-      return;
-    }
-    if (player && player.duration && player.duration > 0 && player.duration !== duration) {
-      setDuration(player.duration);
-    }
-  });
-
-  // Dynamically listen to available audio tracks
-  useEventListener(player, 'availableAudioTracksChange', (event) => {
-    try {
-      if (event?.availableAudioTracks && Array.isArray(event.availableAudioTracks)) {
-        setAvailableAudioTracks(event.availableAudioTracks);
-        applyDefaultEnglishIfHollywood(event.availableAudioTracks);
-      }
-    } catch (e) {}
-  });
-
-  // Dynamically listen to current audio track
-  useEventListener(player, 'audioTrackChange', (event) => {
-    try {
-      if (event?.audioTrack) {
-        setSelectedAudioTrack(event.audioTrack);
-      }
-    } catch (e) {}
-  });
-
-  // Dynamically listen to available subtitle tracks
-  useEventListener(player, 'availableSubtitleTracksChange', (event) => {
-    try {
-      if (event?.availableSubtitleTracks && Array.isArray(event.availableSubtitleTracks)) {
-        setAvailableSubtitleTracks(event.availableSubtitleTracks);
-      }
-    } catch (e) {}
-  });
-
-  // Dynamically listen to current subtitle track
-  useEventListener(player, 'subtitleTrackChange', (event) => {
-    try {
-      setSelectedSubtitleTrack(event?.subtitleTrack || null);
-    } catch (e) {}
-  });
 
 
 
   // Dynamic Scraper & Player execution handler (Strict Server 1: HDHub4u, Server 2: 4KHDHub, Server 3: Movies4u)
   const playVideo = async (episode = currentEpisode, server = activeServer) => {
     const requestId = ++activeScrapeRequestId.current;
+    lastPlayedServerRef.current = server;
+    setActiveServer(server);
     isResolvingRef.current = true;
     setIsResolving(true);
     setPlaybackError(null);
@@ -987,7 +919,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         player.replace(null);
       } catch (e) {}
     }
-    hasAutoSelectedEnglish.current = false;
+    hasAutoSelectedDefaultAudio.current = false;
     hasUserManuallySelectedAudioTrack.current = false;
     setSelectedAudioTrack(null);
     setSelectedSubtitleTrack(null);
@@ -1145,60 +1077,9 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       let initialQuality = (qualities['1080p'] ? '1080p' : (qualities['720p'] ? '720p' : (qualities['4k'] ? '4k' : Object.keys(qualities)[0])));
       let initialStreamLink = qualities[initialQuality] || streamUrl;
 
-      // Strictly verify HTTP 206 Partial Content (Range seeking) support before playing!
-      // If the chosen link is non-seekable (e.g. Google CDN returning 200), search alternative qualities for a 206 stream
-      try {
-        const check206Support = async (url) => {
-          if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
-          if (url.toLowerCase().includes('.m3u8')) return true; // HLS is chunk-indexed and natively seekable
-          if (url.includes('cloudflarestorage.com') || url.includes('r2.')) return true; // Direct Cloudflare R2 verified seekable stream
-            if (url.includes('pixeldrain.dev') || url.includes('pixeldrain.com')) return true; // PixelDrain native HTTP 206 stream
-            if (url.includes('googleusercontent.com') || url.includes('video-downloads') || url.includes('gpdl')) return false; // Google CDN rejects 206 // Google CDN rejects 206
-          try {
-            const controller = new AbortController();
-            const timer = setTimeout(() => { try { controller.abort(); } catch (_) {} }, 2500);
-            const isDirectCdn = url.includes('pixeldrain') || url.includes('cloudflarestorage.com') || url.includes('fastdl') || url.includes('bunker.monster') || url.includes('workers.dev');
-            const defaultRef = playable?.headers?.Referer || (!isDirectCdn ? 'https://gamerxyt.com/' : undefined);
-            const res = await fetch(url.trim(), {
-              method: 'GET',
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Range': 'bytes=0-1024',
-                ...(defaultRef ? { 'Referer': defaultRef } : {})
-              },
-              signal: controller.signal,
-              redirect: 'follow'
-            });
-            clearTimeout(timer);
-            const status = res.status;
-            const acceptRanges = (res.headers.get('accept-ranges') || '').toLowerCase();
-            const contentRange = res.headers.get('content-range');
-            return status === 206 || Boolean(contentRange) || (status === 200 && acceptRanges.includes('bytes'));
-          } catch {
-            return false;
-          }
-        };
-
-        const isSeekable = await check206Support(initialStreamLink);
-        if (!isSeekable) {
-          console.log(`[MovieDetailScreen] Initial link (${initialStreamLink.substring(0, 50)}...) does not support 206 Partial Content. Checking alternative qualities for seekable stream...`);
-          for (const [qKey, qUrl] of Object.entries(qualities)) {
-            if (qUrl && qUrl !== initialStreamLink) {
-              const altSeekable = await check206Support(qUrl);
-              if (altSeekable) {
-                console.log(`[MovieDetailScreen] ⚡ Found 206 Partial Content seekable stream on ${qKey}: ${qUrl.substring(0, 60)}...`);
-                initialStreamLink = qUrl;
-                initialQuality = qKey;
-                break;
-              }
-            }
-          }
-        }
-      } catch (err206) {}
-
       setCurrentQuality(initialQuality);
       console.log(`[MovieDetailScreen] ✅ Extracted available streams:`, qualities);
-      console.log(`[MovieDetailScreen] ▶️ Playing verified stream (${initialQuality}): ${initialStreamLink}`);
+      console.log(`[MovieDetailScreen] ▶️ Playing stream (${initialQuality}): ${initialStreamLink}`);
 
       setIsResolving(false);
       isResolvingRef.current = false;
@@ -1206,89 +1087,20 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       setControlsVisible(true);
       resetControlsTimeout();
 
-      // 4. Feed streaming link directly to Media3 ExoPlayer cleanly (prevents black screen with audio)
-      if (player && requestId === activeScrapeRequestId.current && isMounted.current) {
+      if (requestId === activeScrapeRequestId.current && isMounted.current) {
         try {
           const safeInitialLink = sanitizePlayableUrl(initialStreamLink);
-          const isHls = safeInitialLink.toLowerCase().includes('.m3u8');
-          const isDirectCdn = safeInitialLink.includes('pixeldrain') || 
-                              safeInitialLink.includes('googleusercontent.com') ||
-                              safeInitialLink.includes('cloudflarestorage.com') ||
-                              safeInitialLink.includes('r2.dev') ||
-                              safeInitialLink.includes('X-Amz-') ||
-                              safeInitialLink.includes('fastdl') ||
-                              safeInitialLink.includes('bunker.monster') || safeInitialLink.includes('workers.dev');
-
-          const isM4u = safeInitialLink.includes('dramiyos') || safeInitialLink.includes('m4uplay');
-          const videoHeaders = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            ...(playable?.headers?.Referer 
-              ? { 'Referer': playable.headers.Referer } 
-              : (!isDirectCdn ? { 'Referer': isM4u ? 'https://m4uplay.store/' : 'https://gamerxyt.com/' } : {}))
-          };
-
-          const videoSource = {
-            uri: safeInitialLink,
-            headers: videoHeaders,
-            useCaching: false, // Direct OkHttpDataSource for unrestricted HTTP 206 byte-range seeking
-            contentType: isHls ? 'hls' : 'auto'
-          };
-
           currentStreamInfoRef.current = {
             streamUrl: safeInitialLink,
-            targetQuality: initialQuality,
-            videoSource
+            targetQuality: initialQuality
           };
 
-          
-
           setPlaybackError(null);
-          player.pause();
-          if (typeof player.replaceAsync === 'function') {
-            await player.replaceAsync(videoSource);
-          } else if (typeof player.replace === 'function') {
-            player.replace(videoSource);
-          }
-          if (isMounted.current && player) {
-            try {
-              player.bufferOptions = {
-                preferredForwardBufferDuration: 60,
-                waitsToMinimizeStalling: true,
-                minBufferForPlayback: 1.0,
-                maxBufferBytes: 0,
-                prioritizeTimeOverSizeThreshold: true,
-              };
-            } catch (bErr) {}
-
-            try {
-              player.seekTolerance = {
-                toleranceBefore: 5.0,
-            toleranceAfter: 5.0,
-              };
-            } catch (sErr) {}
-
-            try {
-              player.playbackRate = playbackSpeed || 1.0;
-            } catch (e) {}
-            if (player.status === 'readyToPlay') {
-              player.play();
-              setIsPlaying(true);
-            }
-          }
+          player.replace(safeInitialLink);
+          setIsPlaying(true);
+          player.play();
         } catch (playerErr) {
-          console.warn("[MovieDetailScreen] Media3 player replace error:", playerErr);
-          if (isMounted.current && player) {
-            try {
-              const safeInitialLink = sanitizePlayableUrl(initialStreamLink);
-              if (typeof player.replaceAsync === 'function') {
-                await player.replaceAsync(safeInitialLink);
-              } else {
-                player.replace(safeInitialLink);
-              }
-              player.play();
-              setIsPlaying(true);
-            } catch (e2) {}
-          }
+          console.warn("[MovieDetailScreen] VLC player error:", playerErr);
         }
       }
 
@@ -1326,7 +1138,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     console.log(`[MovieDetailScreen] ⚡ Seamless switch to ${targetQ.toUpperCase()} stream at position ${previousTime.toFixed(1)}s: ${streamUrl}`);
     try {
       // 1. Clear previous track overrides to prevent mismatched TrackGroup index crashes
-      hasAutoSelectedEnglish.current = false;
+      hasAutoSelectedDefaultAudio.current = false;
       setSelectedAudioTrack(null);
       setSelectedSubtitleTrack(null);
       setAvailableAudioTracks([]);
@@ -1360,43 +1172,16 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       };
 
 
-      if (typeof player.replaceAsync === 'function') {
-        await player.replaceAsync(videoSource);
-      } else if (typeof player.replace === 'function') {
-        player.replace(videoSource);
-      }
+      player.replace(safeStreamUrl);
+      setIsPlaying(true);
+      player.play();
 
-      if (isMounted.current && player) {
-        try {
-          player.bufferOptions = {
-            preferredForwardBufferDuration: 60,
-            waitsToMinimizeStalling: false,
-            minBufferForPlayback: 0.5,
-            maxBufferBytes: 0,
-            prioritizeTimeOverSizeThreshold: true,
-          };
-        } catch (bErr) {}
-
-        try {
-          player.seekTolerance = {
-            toleranceBefore: 5.0,
-            toleranceAfter: 5.0,
-          };
-        } catch (sErr) {}
-
-        try {
-          player.playbackRate = playbackSpeed || 1.0;
-        } catch (e) {}
-        
-        // Instant timestamp restoration so playback never restarts from the beginning
-        if (previousTime > 0.5) {
+      if (previousTime > 0.5) {
+        setTimeout(() => {
           try {
-            player.currentTime = previousTime;
+            vlcPlayerRef.current?.seek(previousTime);
           } catch (tErr) {}
-        }
-
-        player.play();
-        setIsPlaying(true);
+        }, 300);
       }
     } catch (e) {
       console.warn("[MovieDetailScreen] playResolvedLink error:", e);
@@ -1419,30 +1204,19 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     resetControlsTimeout();
   };
 
-  // Safe Audio Track Switcher (Strictly uses native AudioTrack reference to prevent JNI crash)
+  // Safe Audio Track Switcher (Direct VLC Track selection)
   const switchAudioTrack = (track) => {
     if (!track) return;
     hasUserManuallySelectedAudioTrack.current = true;
-    if (!player) return;
-    hasUserManuallySelectedAudioTrack.current = true;
+    setSelectedAudioTrack(track);
+    selectedAudioTrackRef.current = track;
     try {
-      const nativeTracks = player.availableAudioTracks;
-      if (Array.isArray(nativeTracks) && nativeTracks.length > 0 && track) {
-        let nativeTarget = null;
-        if (typeof track.originalIndex === 'number' && nativeTracks[track.originalIndex]) {
-          nativeTarget = nativeTracks[track.originalIndex];
-        } else {
-          nativeTarget = nativeTracks.find(
-            (t) => (track.id && t.id === track.id) ||
-                   (track.language && t.language && t.language.toLowerCase() === track.language.toLowerCase()) ||
-                   (track.label && t.label && t.label.toLowerCase() === track.label.toLowerCase())
-          );
-        }
-        if (nativeTarget) {
-          console.log('[MovieDetailScreen] 🔊 Switching audio track to native track:', nativeTarget);
-          player.audioTrack = nativeTarget;
-          setSelectedAudioTrack(nativeTarget);
-        }
+      const tId = typeof track.trackId === 'number'
+        ? track.trackId
+        : (typeof track.id === 'number' ? track.id : parseInt(track.id, 10));
+      if (!isNaN(tId) && tId !== -1) {
+        console.log('[MovieDetailScreen] Switching VLC audio track to id:', tId);
+        vlcPlayerRef.current?.selectAudioTrack(tId);
       }
     } catch (e) {
       console.warn("[MovieDetailScreen] Error setting audioTrack:", e);
@@ -1450,31 +1224,22 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     closePlayerMenu();
   };
 
-  // Safe Subtitle Track Switcher (Strictly uses native SubtitleTrack reference to prevent JNI crash)
+  // Safe Subtitle Track Switcher (Direct VLC Subtitle selection)
   const switchSubtitleTrack = (track) => {
-    if (!player) return;
     try {
       if (!track) {
-        player.subtitleTrack = null;
         setSelectedSubtitleTrack(null);
+        selectedSubtitleTrackRef.current = null;
+        vlcPlayerRef.current?.selectSubtitleTrack(-1);
       } else {
-        const nativeSubs = player.availableSubtitleTracks;
-        if (Array.isArray(nativeSubs) && nativeSubs.length > 0) {
-          let nativeSub = null;
-          if (typeof track.originalIndex === 'number' && nativeSubs[track.originalIndex]) {
-            nativeSub = nativeSubs[track.originalIndex];
-          } else {
-            nativeSub = nativeSubs.find(
-              (s) => (track.id && s.id === track.id) ||
-                     (track.language && s.language && s.language.toLowerCase() === track.language.toLowerCase()) ||
-                     (track.label && s.label && s.label.toLowerCase() === track.label.toLowerCase())
-            );
-          }
-          if (nativeSub) {
-            console.log('[MovieDetailScreen] 💬 Switching subtitle track to:', nativeSub);
-            player.subtitleTrack = nativeSub;
-            setSelectedSubtitleTrack(nativeSub);
-          }
+        setSelectedSubtitleTrack(track);
+        selectedSubtitleTrackRef.current = track;
+        const sId = typeof track.trackId === 'number'
+          ? track.trackId
+          : (typeof track.id === 'number' ? track.id : parseInt(track.id, 10));
+        if (!isNaN(sId)) {
+          console.log('[MovieDetailScreen] Switching VLC subtitle track to id:', sId);
+          vlcPlayerRef.current?.selectSubtitleTrack(sId);
         }
       }
     } catch (e) {
@@ -1682,11 +1447,9 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
   useEffect(() => {
     return () => {
       activeScrapeRequestId.current++;
-      if (player) {
-        try {
-          player.pause();
-        } catch (e) {}
-      }
+      try {
+        vlcPlayerRef.current?.pause();
+      } catch (e) {}
       if (ScreenOrientation && typeof ScreenOrientation.unlockAsync === 'function') {
         ScreenOrientation.unlockAsync().catch(() => {});
       }
@@ -1701,7 +1464,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         } catch (e) {}
       }
     };
-  }, [player]);
+  }, []);
 
   // Android Hardware Back button handling while in Fullscreen
   useEffect(() => {
@@ -1787,7 +1550,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : fallbackDuration);
     const target = safeDuration > 0 ? Math.min(safeDuration, Math.max(0, targetSeconds)) : Math.max(0, targetSeconds);
 
-    console.log(`[MovieDetailScreen] ⏩ Direct Seek to: ${target.toFixed(1)}s (Total duration: ${safeDuration.toFixed(1)}s)`);
+    console.log(`[MovieDetailScreen] ⏩ Direct VLC Seek to: ${target.toFixed(1)}s (Total duration: ${safeDuration.toFixed(1)}s)`);
     pendingSeekTimeRef.current = target;
     isSeekingRef.current = true;
     setIsBuffering(true);
@@ -1798,8 +1561,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     setCurrentTime(target);
 
     try {
-      player.currentTime = target;
-      player.play();
+      vlcPlayerRef.current?.seek(target);
+      vlcPlayerRef.current?.play();
       setIsPlaying(true);
     } catch (e) {
       console.warn('[MovieDetailScreen] seekTo error:', e);
@@ -2212,20 +1975,169 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         }}
         style={{ width: '100%', height: '100%', backgroundColor: '#000000', position: 'relative', overflow: 'hidden' }}
       >
-        {/* Playback Engine: Media3 ExoPlayer */}
+        {/* Playback Engine: in-app libvlc (Native VLC Media Player) */}
         <View style={StyleSheet.absoluteFill}>
-          <VideoView
-            ref={videoViewRef}
-            player={player}
+          <VLCPlayerView
+            ref={vlcPlayerRef}
+            source={vlcSource}
+            autoplay={true}
+            paused={!isPlaying}
+            muted={isMuted}
+            rate={playbackSpeed || 1.0}
+            resizeMode={contentFitMode === 'cover' ? 'cover' : 'contain'}
             style={StyleSheet.absoluteFill}
-            contentFit={contentFitMode || 'contain'}
-            surfaceType="textureView"
-            useExoShutter={false}
-            nativeControls={false}
-            onFirstFrameRender={() => {
+            progressUpdateInterval={500}
+            showNowPlaying={false}
+            continueAudioInBackground={false}
+            onLoadStart={() => {
+              console.log('[VLCPlayer] onLoadStart');
+              vlcPlayerRef.current?.getTracks();
+            }}
+            onLoad={(event) => {
+              console.log('[VLCPlayer] onLoad event:', event);
               setHasFirstFrameRendered(true);
               setIsBuffering(false);
               isBufferingRef.current = false;
+              if (event?.duration && event.duration > 0) {
+                setDuration(event.duration);
+              }
+              if (lastSavedSeekTimeRef.current > 0.5) {
+                const targetSec = lastSavedSeekTimeRef.current;
+                console.log('[VLCPlayer] Seamlessly restoring position after orientation change:', targetSec);
+                vlcPlayerRef.current?.seek(targetSec);
+                currentTimeRef.current = targetSec;
+                setCurrentTime(targetSec);
+                lastSavedSeekTimeRef.current = 0;
+              }
+              vlcPlayerRef.current?.getTracks();
+            }}
+            onProgress={(event) => {
+              if (isScrubbingRef.current) return;
+              const cur = event?.currentTime;
+              if (typeof cur === 'number' && !isNaN(cur)) {
+                if (pendingSeekTimeRef.current !== null && Math.abs(cur - pendingSeekTimeRef.current) > 3 && cur < 0.5) {
+                  return;
+                }
+                pendingSeekTimeRef.current = null;
+                isSeekingRef.current = false;
+                currentTimeRef.current = cur;
+                if (cur >= 0) {
+                  setHasFirstFrameRendered(true);
+                  if (isBufferingRef.current) {
+                    setIsBuffering(false);
+                    isBufferingRef.current = false;
+                  }
+                }
+                if (controlsVisibleRef.current || !isSeekingRef.current) {
+                  setCurrentTime(cur);
+                }
+                if (availableAudioTracksRef.current.length === 0) {
+                  vlcPlayerRef.current?.getTracks();
+                }
+              }
+              if (event?.duration && event.duration > 0 && event.duration !== duration) {
+                setDuration(event.duration);
+              }
+            }}
+            onSeek={(event) => {
+              console.log('[VLCPlayer] onSeek event:', event);
+              pendingSeekTimeRef.current = null;
+              isSeekingRef.current = false;
+              setIsBuffering(false);
+              isBufferingRef.current = false;
+              vlcPlayerRef.current?.getTracks();
+            }}
+            onPlaying={() => {
+              console.log('[VLCPlayer] onPlaying');
+              setIsPlaying(true);
+              isPlayingRef.current = true;
+              pendingSeekTimeRef.current = null;
+              isSeekingRef.current = false;
+              setHasFirstFrameRendered(true);
+              setIsBuffering(false);
+              isBufferingRef.current = false;
+              vlcPlayerRef.current?.getTracks();
+              setTimeout(() => {
+                try { vlcPlayerRef.current?.getTracks(); } catch (_) {}
+              }, 600);
+              setTimeout(() => {
+                try { vlcPlayerRef.current?.getTracks(); } catch (_) {}
+              }, 1800);
+            }}
+            onPaused={() => {
+              setIsPlaying(false);
+              isPlayingRef.current = false;
+            }}
+            onBuffer={(event) => {
+              const buffering = Boolean(event?.isBuffering);
+              console.log('[VLCPlayer] onBuffer:', buffering);
+              setIsBuffering(buffering);
+              isBufferingRef.current = buffering;
+              if (!buffering) {
+                isSeekingRef.current = false;
+                vlcPlayerRef.current?.getTracks();
+              }
+            }}
+            onTracks={(tracks) => {
+              console.log('[VLCPlayer] onTracks received:', tracks);
+              if (tracks?.audio && Array.isArray(tracks.audio) && tracks.audio.length > 0) {
+                const formatted = tracks.audio.map((t, idx) => ({
+                  id: String(t.id),
+                  trackId: t.id,
+                  originalIndex: idx,
+                  name: t.name,
+                  label: t.name,
+                  language: t.name,
+                  displayLabel: getTrackDisplayLabel(t, 'Audio Track', idx, tracks.audio)
+                }));
+                setAvailableAudioTracks(formatted);
+                availableAudioTracksRef.current = formatted;
+                // Lock & preserve active audio track across minimize/maximize and track reload events
+                if (selectedAudioTrackRef.current) {
+                  const match = formatted.find(t => 
+                    t.trackId === selectedAudioTrackRef.current.trackId || 
+                    (t.id != null && selectedAudioTrackRef.current.id != null && String(t.id) === String(selectedAudioTrackRef.current.id)) ||
+                    (t.displayLabel && t.displayLabel === selectedAudioTrackRef.current.displayLabel)
+                  );
+                  if (match) {
+                    setSelectedAudioTrack(match);
+                    selectedAudioTrackRef.current = match;
+                    if (typeof tracks.audioIndex === 'number' && tracks.audioIndex !== match.trackId) {
+                      console.log('[MovieDetailScreen] Preserving selected audio track:', match.trackId, match.displayLabel);
+                      vlcPlayerRef.current?.selectAudioTrack(match.trackId);
+                    }
+                  }
+                } else if (!hasAutoSelectedDefaultAudio.current && !hasUserManuallySelectedAudioTrack.current) {
+                  applyDefaultAudioTrack(formatted);
+                } else if (typeof tracks.audioIndex === 'number') {
+                  const currentActive = formatted.find(t => t.trackId === tracks.audioIndex);
+                  if (currentActive) {
+                    setSelectedAudioTrack(currentActive);
+                    selectedAudioTrackRef.current = currentActive;
+                  }
+                }
+              }
+              if (tracks?.subtitle && Array.isArray(tracks.subtitle)) {
+                const formattedSubs = tracks.subtitle
+                  .filter(s => s && s.id !== -1 && String(s.name || '').trim().toLowerCase() !== 'disable' && String(s.name || '').trim().toLowerCase() !== 'disabled')
+                  .map((s, idx) => ({
+                    id: String(s.id),
+                    trackId: s.id,
+                    originalIndex: idx,
+                    name: s.name,
+                    label: s.name,
+                    language: s.name,
+                    displayLabel: s.name || `Subtitle ${idx + 1}`
+                  }));
+                setAvailableSubtitleTracks(formattedSubs);
+                availableSubtitleTracksRef.current = formattedSubs;
+              }
+            }}
+            onError={(err) => {
+              console.warn('[VLCPlayer] Playback error event:', err);
+            }}
+            onEnd={() => {
+              setIsPlaying(false);
             }}
           />
         </View>
@@ -2902,51 +2814,11 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                   </View>
                 </View>
 
-                {/* Dynamic Timestamps & Direct Jump Buttons (10:00 & 20:00) */}
+                {/* Dynamic Timestamps */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: verticalScale(1), paddingHorizontal: scale(2) }}>
                   <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: moderateScale(10.5), fontWeight: '700' }}>
                     {formatTime(currentTime)}
                   </Text>
-
-                  {/* Direct Jump Shortcuts: Jump to 10min / 20min */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: scale(8) }}>
-                    {(duration >= 600 || !duration) && (
-                      <TouchableOpacity
-                        onPress={() => seekToTimestamp(600)}
-                        activeOpacity={0.7}
-                        style={{
-                          backgroundColor: Math.abs(currentTime - 600) < 15 ? '#38bdf8' : 'rgba(255,255,255,0.15)',
-                          paddingHorizontal: scale(8),
-                          paddingVertical: verticalScale(2),
-                          borderRadius: scale(10),
-                          borderWidth: 1,
-                          borderColor: Math.abs(currentTime - 600) < 15 ? '#38bdf8' : 'rgba(255,255,255,0.2)'
-                        }}
-                      >
-                        <Text style={{ color: Math.abs(currentTime - 600) < 15 ? '#000000' : '#ffffff', fontSize: moderateScale(9.5), fontWeight: '700' }}>
-                          10:00
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                    {(duration >= 1200 || !duration) && (
-                      <TouchableOpacity
-                        onPress={() => seekToTimestamp(1200)}
-                        activeOpacity={0.7}
-                        style={{
-                          backgroundColor: Math.abs(currentTime - 1200) < 15 ? '#38bdf8' : 'rgba(255,255,255,0.15)',
-                          paddingHorizontal: scale(8),
-                          paddingVertical: verticalScale(2),
-                          borderRadius: scale(10),
-                          borderWidth: 1,
-                          borderColor: Math.abs(currentTime - 1200) < 15 ? '#38bdf8' : 'rgba(255,255,255,0.2)'
-                        }}
-                      >
-                        <Text style={{ color: Math.abs(currentTime - 1200) < 15 ? '#000000' : '#ffffff', fontSize: moderateScale(9.5), fontWeight: '700' }}>
-                          20:00
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
 
                   <Text style={{ color: '#a1a1aa', fontSize: moderateScale(10.5), fontWeight: '700' }}>
                     {duration > 0 ? formatTime(duration) : '--:--'}
@@ -3623,15 +3495,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                 )}
 
                 {activePlayerMenu === 'audio' && (
-                  availableAudioTracks.length === 0 ? (
-                    <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: verticalScale(16) }}>
-                      <ActivityIndicator size="small" color="#38bdf8" />
-                      <Text style={{ color: '#94a3b8', fontSize: moderateScale(11), marginTop: verticalScale(8) }}>
-                        Scanning audio streams...
-                      </Text>
-                    </View>
-                  ) : (
-                    getDeduplicatedAudioTracks(availableAudioTracks).map((track, idx) => {
+                  getDeduplicatedAudioTracks(availableAudioTracks).map((track, idx) => {
                       const isSelected = selectedAudioTrack ? (
                         (selectedAudioTrack.id != null && track.id != null && String(selectedAudioTrack.id) === String(track.id)) ||
                         (typeof selectedAudioTrack.originalIndex === 'number' && typeof track.originalIndex === 'number' && selectedAudioTrack.originalIndex === track.originalIndex)
@@ -3663,7 +3527,6 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
                         </TouchableOpacity>
                       );
                     })
-                  )
                 )}
 
                 {activePlayerMenu === 'subtitles' && (
@@ -3737,8 +3600,9 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     <View style={{ flex: 1, backgroundColor: '#000000', paddingTop: insets.top }}>
       <StatusBar hidden={false} barStyle="light-content" translucent />
 
-      {/* TOP VIDEO PLAYER CONTAINER (Media3 ExoPlayer - Seamless Portrait & Fullscreen without unmounting surface) */}
+      {/* TOP VIDEO PLAYER CONTAINER */}
       <View 
+        keepScreenOn={isPlaying && hasStartedPlayback}
         style={isFullscreen ? {
           position: 'absolute',
           top: 0,
@@ -3806,7 +3670,11 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
             return (
               <TouchableOpacity
                 key={server.id}
-                onPress={() => handleServerChange(server.id)}
+                onPress={() => {
+                  console.log('[MovieDetailScreen] Manually selected server:', server.id);
+                  setActiveServer(server.id);
+                  setPlaybackError(null);
+                }}
                 activeOpacity={0.8}
                 style={[
                   detailStyles.serverPill,

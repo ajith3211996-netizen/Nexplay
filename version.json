@@ -1,0 +1,94 @@
+{
+  "major": 1,
+  "minor": 1,
+  "patch": 8,
+  "issue": 6,
+  "build": 119,
+  "updateType": "bugfix",
+  "timestamp": "20260925",
+  "versionName": "1.1.8.6.119-bugfix.20260925",
+  "versionCode": 1180119,
+  "lastSuccessfulBuild": "2026-09-25T19:19:12.268Z",
+  "history": [
+    {
+      "versionName": "1.1.8.6.119-bugfix.20260925",
+      "versionCode": 1180119,
+      "updateType": "bugfix",
+      "build": 119,
+      "note": "Seamless minimize/maximize audio lock, remove disable subtitle, manual server select before play",
+      "builtAt": "2026-09-25T19:19:12.268Z"
+    },
+    {
+      "versionName": "1.1.8.5.118-bugfix.20260925",
+      "versionCode": 1180118,
+      "updateType": "bugfix",
+      "build": 118,
+      "note": "Fix fullscreen minimize/maximize restart and enable continuous screen wake lock",
+      "builtAt": "2026-09-25T18:59:22.148Z"
+    },
+    {
+      "versionName": "1.1.8.4.117-bugfix.20260925",
+      "versionCode": 1180117,
+      "updateType": "bugfix",
+      "build": 117,
+      "note": "Clean language audio tracks, remove 10/20min jump buttons, and TMDB official language default",
+      "builtAt": "2026-09-25T18:44:24.097Z"
+    },
+    {
+      "versionName": "1.1.8.3.116-bugfix.20260925",
+      "versionCode": 1180116,
+      "updateType": "bugfix",
+      "build": 116,
+      "note": "Instant VLC playback start and active audio track polling",
+      "builtAt": "2026-09-25T18:25:16.460Z"
+    },
+    {
+      "versionName": "1.1.8.2.115-bugfix.20260925",
+      "versionCode": 1180115,
+      "updateType": "bugfix",
+      "build": 115,
+      "note": "Fix VLC playback initiation and seek resilience",
+      "builtAt": "2026-09-25T18:04:24.587Z"
+    },
+    {
+      "versionName": "1.1.0.0.114-minor.20260925",
+      "versionCode": 1100114,
+      "updateType": "minor",
+      "build": 114,
+      "note": "Migrate to in-app libvlc player with seamless MKV seeking",
+      "builtAt": "2026-09-25T17:42:44.343Z"
+    },
+    {
+      "versionName": "1.0.8.6.113-bugfix.20260924",
+      "versionCode": 1080113,
+      "updateType": "bugfix",
+      "build": 113,
+      "note": "Debug build with seek diagnostics and standalone bundle",
+      "builtAt": "2026-09-24T15:48:55.357Z"
+    },
+    {
+      "versionName": "1.0.8.4.111-bugfix.20260924",
+      "versionCode": 1080111,
+      "updateType": "bugfix",
+      "build": 111,
+      "note": "Compiled expo-video from source with Media3 seek logging",
+      "builtAt": "2026-09-24T15:33:30.513Z"
+    },
+    {
+      "versionName": "1.0.8.3.110-bugfix.20260924",
+      "versionCode": 1080110,
+      "updateType": "bugfix",
+      "build": 110,
+      "note": "Injected Media3 seek diagnostic logging",
+      "builtAt": "2026-09-24T15:23:34.922Z"
+    },
+    {
+      "versionName": "1.0.8.2.109-bugfix.20260924",
+      "versionCode": 1080109,
+      "updateType": "bugfix",
+      "build": 109,
+      "note": "Resolved Server 1/2 scrapers and ExoPlayer keyframe seeking across all servers",
+      "builtAt": "2026-09-24T15:03:36.273Z"
+    }
+  ]
+}

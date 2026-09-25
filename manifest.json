@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "version": "1.0.7",
-  "updatedAt": "2026-09-24T14:40:00.000Z",
-  "commitSha": "d4fadad",
+  "updatedAt": "2026-09-25T19:55:39.333Z",
+  "commitSha": "07088bd",
   "name": "NexPlay Providers Configuration",
   "description": "Dynamic Over-The-Air scraper and provider definitions for NexPlay & Stitch-Nexplay",
   "providers": {
