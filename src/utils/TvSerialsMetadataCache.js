@@ -4,9 +4,9 @@
  * Supports:
  * - Server 1: Tamildhool (tamildhool.tech)
  * - Server 2: Tamilgun (arivumani.net)
- * - Cached metadata & hero images for both servers (zero-latency offline-first)
- * - Comprehensive serials list for dropdowns
- * - Channel logos & metadata
+ * - Cached metadata & hero images for both servers
+ * - Channels (Sun TV, Star Vijay, Zee Tamil)
+ * - TV Programmes & Special Shows
  */
 
 export const SERVERS = [
@@ -63,15 +63,6 @@ export const CHANNELS = [
     color: '#a855f7',
     icon: 'sparkles',
     logoUrl: 'https://upload.wikimedia.org/wikipedia/en/thumb/b/b5/Zee_Tamil_logo.svg/300px-Zee_Tamil_logo.svg.png'
-  },
-  {
-    id: 'ktv',
-    code: 'ktv',
-    name: 'KTV',
-    tamilName: 'கே டிவி',
-    color: '#0ea5e9',
-    icon: 'film',
-    logoUrl: 'https://upload.wikimedia.org/wikipedia/en/thumb/9/9f/KTV_logo.svg/300px-KTV_logo.svg.png'
   }
 ];
 
@@ -276,86 +267,6 @@ export const TAMILDHOOL_SERIALS_CACHE = [
     tamilColor: '#c084fc',
     borderColor: 'rgba(192, 132, 252, 0.25)',
     server: 'tamildhool'
-  },
-  {
-    id: 'td_sandakozhi',
-    serialCode: 'sandakozhi',
-    title: 'Sandakozhi',
-    tamilTitle: 'சண்டக்கோழி',
-    channel: 'Zee Tamil',
-    channelCode: 'zee',
-    timeSlot: '09:00 PM',
-    episodesCount: '370 episodes logged',
-    episodes: '370 Eps',
-    tag: 'Daily Soap',
-    networkTag: 'ZEE TAMIL • PRIME',
-    networkColor: '#a855f7',
-    description: 'Mahalakshmi and Vikram find themselves in a war of egos and unexpected romance.',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4',
-    bgColor: '#16222b',
-    tamilColor: '#2dd4bf',
-    borderColor: 'rgba(45, 212, 191, 0.25)',
-    server: 'tamildhool'
-  },
-  {
-    id: 'td_mahanathi',
-    serialCode: 'mahanathi',
-    title: 'Mahanathi',
-    tamilTitle: 'மகாநதி',
-    channel: 'Star Vijay',
-    channelCode: 'vijay',
-    timeSlot: '07:00 PM',
-    episodesCount: '440 episodes logged',
-    episodes: '440 Eps',
-    tag: 'Family Drama',
-    networkTag: 'VIJAY TV • HIT',
-    networkColor: '#ef4444',
-    description: 'Four sisters struggle for dignity and financial security after the sudden demise of their father.',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4',
-    bgColor: '#281a18',
-    tamilColor: '#fca5a5',
-    borderColor: 'rgba(252, 165, 165, 0.25)',
-    server: 'tamildhool'
-  },
-  {
-    id: 'td_super_singer',
-    serialCode: 'super_singer',
-    title: 'Super Singer S10',
-    tamilTitle: 'சூப்பர் சிங்கர் 10',
-    channel: 'Star Vijay',
-    channelCode: 'vijay',
-    timeSlot: 'Sat-Sun 08:00 PM',
-    episodesCount: '84 episodes logged',
-    episodes: '84 Eps',
-    tag: 'Reality Show',
-    networkTag: 'VIJAY TV • VARIETY',
-    networkColor: '#ef4444',
-    description: 'Tamil Nadu supreme singing reality competition hunting for the greatest vocal talent.',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-    bgColor: '#13192e',
-    tamilColor: '#93c5fd',
-    borderColor: 'rgba(59, 130, 246, 0.25)',
-    server: 'tamildhool'
-  },
-  {
-    id: 'td_cooku_with_comali',
-    serialCode: 'cooku_with_comali',
-    title: 'Cooku With Comali S5',
-    tamilTitle: 'குக் வித் கோமாளி 5',
-    channel: 'Star Vijay',
-    channelCode: 'vijay',
-    timeSlot: 'Sat-Sun 09:30 PM',
-    episodesCount: '52 episodes logged',
-    episodes: '52 Eps',
-    tag: 'Reality Show',
-    networkTag: 'VIJAY TV • COMEDY',
-    networkColor: '#ef4444',
-    description: 'Hilarious culinary comedy faceoff between celebrities and eccentric comalis.',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
-    bgColor: '#19152b',
-    tamilColor: '#c084fc',
-    borderColor: 'rgba(192, 132, 252, 0.25)',
-    server: 'tamildhool'
   }
 ];
 
@@ -480,89 +391,10 @@ export const TAMILGUN_SERIALS_CACHE = [
     tamilColor: '#fdba74',
     borderColor: 'rgba(16, 185, 129, 0.25)',
     server: 'tamilgun'
-  },
-  {
-    id: 'tg_pandian_stores_2',
-    serialCode: 'pandian_stores_2',
-    title: 'Pandian Stores 2',
-    tamilTitle: 'பாண்டியன் ஸ்டோர்ஸ் 2',
-    channel: 'Star Vijay',
-    channelCode: 'vijay',
-    timeSlot: '08:00 PM',
-    episodesCount: '320 episodes logged',
-    episodes: '320 Eps',
-    tag: 'Server 2 Mirror',
-    networkTag: 'ARIVUMANI • VIJAY TV',
-    networkColor: '#10b981',
-    description: 'Pandian Stores Season 2 family drama streaming on Server 2.',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4',
-    bgColor: '#1c182d',
-    tamilColor: '#fbbf24',
-    borderColor: 'rgba(16, 185, 129, 0.25)',
-    server: 'tamilgun'
-  },
-  {
-    id: 'tg_vanathai_pola',
-    serialCode: 'vanathai_pola',
-    title: 'Vanathai Pola',
-    tamilTitle: 'வானத்தைப்போல',
-    channel: 'Sun TV',
-    channelCode: 'sun',
-    timeSlot: '06:30 PM',
-    episodesCount: '890 episodes logged',
-    episodes: '890 Eps',
-    tag: 'Server 2 Mirror',
-    networkTag: 'ARIVUMANI • SUN TV',
-    networkColor: '#10b981',
-    description: 'Chinrasu and Thulasi sibling relationship drama on Server 2.',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4',
-    bgColor: '#0c211a',
-    tamilColor: '#6ee7b7',
-    borderColor: 'rgba(16, 185, 129, 0.25)',
-    server: 'tamilgun'
-  },
-  {
-    id: 'tg_sa_re_ga_ma_pa',
-    serialCode: 'sa_re_ga_ma_pa',
-    title: 'Sa Re Ga Ma Pa S4',
-    tamilTitle: 'ஸ ரி க ம ப 4',
-    channel: 'Zee Tamil',
-    channelCode: 'zee',
-    timeSlot: 'Sat-Sun 07:00 PM',
-    episodesCount: '60 episodes logged',
-    episodes: '60 Eps',
-    tag: 'Reality Show',
-    networkTag: 'ARIVUMANI • ZEE TAMIL',
-    networkColor: '#10b981',
-    description: 'Zee Tamil musical talent contest with celebrated industry judges.',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-    bgColor: '#291118',
-    tamilColor: '#fde047',
-    borderColor: 'rgba(16, 185, 129, 0.25)',
-    server: 'tamilgun'
-  },
-  {
-    id: 'tg_mr_mrs_chinnathirai',
-    serialCode: 'mr_mrs_chinnathirai',
-    title: 'Mr & Mrs Chinnathirai',
-    tamilTitle: 'மிஸ்டர் & மிஸஸ் சின்னத்...',
-    channel: 'Star Vijay',
-    channelCode: 'vijay',
-    timeSlot: 'Sunday 09:00 PM',
-    episodesCount: '48 episodes logged',
-    episodes: '48 Eps',
-    tag: 'Reality Show',
-    networkTag: 'ARIVUMANI • VIJAY TV',
-    networkColor: '#10b981',
-    description: 'Celebrity television couples compete in thrilling games and comedy rounds.',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4',
-    bgColor: '#281b11',
-    tamilColor: '#fcd34d',
-    borderColor: 'rgba(16, 185, 129, 0.25)',
-    server: 'tamilgun'
   }
 ];
 
+// Popular Reality Shows
 export const REALITY_SHOWS_CACHE = [
   {
     id: 'super_singer_10',
@@ -636,6 +468,70 @@ export const REALITY_SHOWS_CACHE = [
   }
 ];
 
+// TV Programmes & Talk Shows Category
+export const TV_PROGRAMMES_CACHE = [
+  {
+    id: 'prg_neeya_naana',
+    serialCode: 'neeya_naana',
+    title: 'Neeya Naana',
+    tamilTitle: 'நீயா நானா',
+    channel: 'Star Vijay',
+    channelCode: 'vijay',
+    genre: 'Talk Show',
+    timeSlot: 'Sunday 12:30 PM',
+    episodesCount: '820 episodes logged',
+    tag: 'Debate Show',
+    bgColor: '#1a192b',
+    tamilColor: '#93c5fd',
+    borderColor: 'rgba(59, 130, 246, 0.25)'
+  },
+  {
+    id: 'prg_tamizha_tamizha',
+    serialCode: 'tamizha_tamizha',
+    title: 'Tamizha Tamizha',
+    tamilTitle: 'தமிழா தமிழா',
+    channel: 'Zee Tamil',
+    channelCode: 'zee',
+    genre: 'Talk Show',
+    timeSlot: 'Sunday 12:00 PM',
+    episodesCount: '340 episodes logged',
+    tag: 'Debate Show',
+    bgColor: '#28121f',
+    tamilColor: '#f472b6',
+    borderColor: 'rgba(244, 114, 182, 0.25)'
+  },
+  {
+    id: 'prg_vanakkam_tamizha',
+    serialCode: 'vanakkam_tamizha',
+    title: 'Vanakkam Tamizha',
+    tamilTitle: 'வணக்கம் தமிழா',
+    channel: 'Sun TV',
+    channelCode: 'sun',
+    genre: 'Morning Show',
+    timeSlot: 'Daily 08:00 AM',
+    episodesCount: '1950 episodes logged',
+    tag: 'Celebrity Talk',
+    bgColor: '#112224',
+    tamilColor: '#38bdf8',
+    borderColor: 'rgba(56, 189, 248, 0.25)'
+  },
+  {
+    id: 'prg_sunday_kondattam',
+    serialCode: 'sunday_kondattam',
+    title: 'Sunday Kondattam',
+    tamilTitle: 'சண்டே கொண்டாட்டம்',
+    channel: 'Sun TV',
+    channelCode: 'sun',
+    genre: 'Game Show',
+    timeSlot: 'Sunday 09:30 AM',
+    episodesCount: '210 episodes logged',
+    tag: 'Entertainment',
+    bgColor: '#241a12',
+    tamilColor: '#fbbf24',
+    borderColor: 'rgba(251, 191, 36, 0.25)'
+  }
+];
+
 export function getCachedSerialsForServer(serverId = 'tamildhool') {
   if (serverId === 'tamilgun') {
     return TAMILGUN_SERIALS_CACHE;
@@ -648,5 +544,7 @@ export function findSerial(serialIdOrCode, serverId = 'tamildhool') {
   const found = list.find(s => s.id === serialIdOrCode || s.serialCode === serialIdOrCode);
   if (found) return found;
   const inReality = REALITY_SHOWS_CACHE.find(r => r.id === serialIdOrCode || r.serialCode === serialIdOrCode);
-  return inReality || list[0];
+  if (inReality) return inReality;
+  const inPrg = TV_PROGRAMMES_CACHE.find(p => p.id === serialIdOrCode || p.serialCode === serialIdOrCode);
+  return inPrg || list[0];
 }

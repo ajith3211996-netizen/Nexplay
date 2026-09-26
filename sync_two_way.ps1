@@ -33,6 +33,8 @@ $sharedFiles = @(
     "src\utils\DnsResolver.js",
     "src\utils\AudioTrackSelector.js",
     "src\utils\PlayerSettingsController.js",
+    "src\utils\TvSerialsMetadataCache.js",
+    "src\components\TvSerialsScreen.js",
     "manifest.json",
     "version.json",
     "version_manager.js",
