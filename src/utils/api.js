@@ -461,6 +461,103 @@ export const fetchHindiTvSeries = async () => {
   }
 };
 
+
+// Fetch Indian TV Serials (Daily Soaps & Television Dramas)
+export const fetchIndianTvSerials = async () => {
+  try {
+    const response = await fetchWithRetry(
+      `${TMDB_BASE_URL}/discover/tv?api_key=${TMDB_API_KEY}&with_origin_country=IN&sort_by=popularity.desc&page=1`,
+      { headers }
+    );
+    if (!response || !response.ok) return [];
+    const data = await response.json();
+    return (data.results || []).map(s => ({ ...s, media_type: 'tv', tag: 'Daily Serial' }));
+  } catch (error) {
+    console.warn('Error fetching Indian TV serials:', error);
+    return [];
+  }
+};
+
+// Fetch Tamil TV Serials (Sun TV, Vijay TV, Zee Tamil)
+export const fetchTamilTvSerials = async () => {
+  try {
+    const response = await fetchWithRetry(
+      `${TMDB_BASE_URL}/discover/tv?api_key=${TMDB_API_KEY}&with_origin_country=IN&with_original_language=ta&sort_by=popularity.desc&page=1`,
+      { headers }
+    );
+    if (!response || !response.ok) return [];
+    const data = await response.json();
+    return (data.results || []).map(s => ({ ...s, media_type: 'tv', tag: 'Tamil Serial' }));
+  } catch (error) {
+    console.warn('Error fetching Tamil TV serials:', error);
+    return [];
+  }
+};
+
+// Fetch Hindi TV Serials (Star Plus, Zee TV, Sony, Colors)
+export const fetchHindiTvSerials = async () => {
+  try {
+    const response = await fetchWithRetry(
+      `${TMDB_BASE_URL}/discover/tv?api_key=${TMDB_API_KEY}&with_origin_country=IN&with_original_language=hi&sort_by=popularity.desc&page=1`,
+      { headers }
+    );
+    if (!response || !response.ok) return [];
+    const data = await response.json();
+    return (data.results || []).map(s => ({ ...s, media_type: 'tv', tag: 'Hindi Serial' }));
+  } catch (error) {
+    console.warn('Error fetching Hindi TV serials:', error);
+    return [];
+  }
+};
+
+// Fetch Telugu TV Serials (Star Maa, Zee Telugu, ETV)
+export const fetchTeluguTvSerials = async () => {
+  try {
+    const response = await fetchWithRetry(
+      `${TMDB_BASE_URL}/discover/tv?api_key=${TMDB_API_KEY}&with_origin_country=IN&with_original_language=te&sort_by=popularity.desc&page=1`,
+      { headers }
+    );
+    if (!response || !response.ok) return [];
+    const data = await response.json();
+    return (data.results || []).map(s => ({ ...s, media_type: 'tv', tag: 'Telugu Serial' }));
+  } catch (error) {
+    console.warn('Error fetching Telugu TV serials:', error);
+    return [];
+  }
+};
+
+// Fetch Malayalam TV Serials (Asianet, Surya TV, Zee Keralam)
+export const fetchMalayalamTvSerials = async () => {
+  try {
+    const response = await fetchWithRetry(
+      `${TMDB_BASE_URL}/discover/tv?api_key=${TMDB_API_KEY}&with_origin_country=IN&with_original_language=ml&sort_by=popularity.desc&page=1`,
+      { headers }
+    );
+    if (!response || !response.ok) return [];
+    const data = await response.json();
+    return (data.results || []).map(s => ({ ...s, media_type: 'tv', tag: 'Malayalam Serial' }));
+  } catch (error) {
+    console.warn('Error fetching Malayalam TV serials:', error);
+    return [];
+  }
+};
+
+// Fetch Top Rated Indian TV Serials
+export const fetchTopRatedTvSerials = async () => {
+  try {
+    const response = await fetchWithRetry(
+      `${TMDB_BASE_URL}/discover/tv?api_key=${TMDB_API_KEY}&with_origin_country=IN&sort_by=vote_average.desc&vote_count.gte=3&page=1`,
+      { headers }
+    );
+    if (!response || !response.ok) return [];
+    const data = await response.json();
+    return (data.results || []).map(s => ({ ...s, media_type: 'tv', tag: 'Top Rated Serial' }));
+  } catch (error) {
+    console.warn('Error fetching top rated TV serials:', error);
+    return [];
+  }
+};
+
 // Fetch TV Season Details (Episodes list)
 export const fetchTvSeasonEpisodes = async (tvId, seasonNumber = 1) => {
   if (!tvId) return [];

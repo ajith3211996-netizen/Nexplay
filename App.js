@@ -56,6 +56,7 @@ import CategoryDetailScreen from './src/components/CategoryDetailScreen';
 import SearchScreen from './src/components/SearchScreen';
 import MoviesScreen from './src/components/MoviesScreen';
 import TvSeriesScreen from './src/components/TvSeriesScreen';
+import TvSerialsScreen from './src/components/TvSerialsScreen';
 import AccountScreen from './src/components/AccountScreen';
 
 // Utilities & Fetch helpers
@@ -503,6 +504,14 @@ export default function App() {
             {/* 3. TV SERIES TAB */}
             {activeTab === 'TV Series' && (
               <TvSeriesScreen 
+                onMoviePress={handleMoviePress} 
+                onSeeMore={handleSeeMore}
+              />
+            )}
+
+            {/* 4. TV SERIALS TAB */}
+            {activeTab === 'TV Serials' && (
+              <TvSerialsScreen 
                 onMoviePress={handleMoviePress} 
                 onSeeMore={handleSeeMore}
               />
