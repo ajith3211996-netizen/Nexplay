@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.7",
-  "updatedAt": "2026-09-25T19:55:39.333Z",
-  "commitSha": "07088bd",
+  "version": "1.0.8",
+  "updatedAt": "2026-09-26T14:18:05.303Z",
+  "commitSha": "4332ea1",
   "name": "NexPlay Providers Configuration",
   "description": "Dynamic Over-The-Air scraper and provider definitions for NexPlay & Stitch-Nexplay",
   "providers": {
@@ -73,6 +73,55 @@
         "packerUnpacker": true,
         "directR2Streams": true
       }
+    },
+    "tamildhool": {
+      "id": "tamildhool",
+      "name": "Server 4 (TamilDhool)",
+      "enabled": true,
+      "priority": 4,
+      "baseUrl": "https://www.tamildhool.tech",
+      "mirrors": [
+        "https://www.tamildhool.tech",
+        "https://tamildhool.tech"
+      ],
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://futuregentrends.com/",
+        "Origin": "https://futuregentrends.com"
+      },
+      "features": {
+        "serials": true,
+        "tvShows": true,
+        "directHls": true,
+        "bunnyStream": true,
+        "vibrantPulse": true,
+        "dateFinder": true
+      }
+    },
+    "tamilgun": {
+      "id": "tamilgun",
+      "name": "Server 5 (TamilGun)",
+      "enabled": true,
+      "priority": 5,
+      "baseUrl": "https://tamilgun.now",
+      "tvBaseUrl": "https://arivumani.net",
+      "mirrors": [
+        "https://tamilgun.now",
+        "https://arivumani.net"
+      ],
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://play.playallu.xyz/",
+        "Origin": "https://play.playallu.xyz"
+      },
+      "features": {
+        "serials": true,
+        "tvShows": true,
+        "movies": true,
+        "directHls": true,
+        "playalluDecrypt": true,
+        "dateFinder": true
+      }
     }
   },
   "dns": {
@@ -84,6 +133,9 @@
     ]
   },
   "changeLog": [
+    "Modular provider architecture: isolated dedicated directories for HDHub4u, 4KHDHub, Movies4u, TamilDhool, and TamilGun with zero clumsy folder mixing",
+    "Integrated Server 4 (TamilDhool) and Server 5 (TamilGun / Arivumani) with high-speed Bunny CDN and PlayAllu AES direct stream resolution",
+    "Added high-accuracy serial episode finder matching by Title, Date (today, yesterday, DD-MM-YYYY), and Channel",
     "Always scrape all qualities (480p, 720p, 1080p, 4K) concurrently and post to ExoPlayer qualities map",
     "Strict WEB-DL exclusivity over WEBRip for Server 1 (HDHub4u) and Server 2 (4KHDHub)",
     "Instant 0ms programmatic Greenmotors timer countdown bypass via 5-step token decryption",

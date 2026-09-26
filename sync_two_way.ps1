@@ -60,6 +60,24 @@ if (Test-Path "$stitchPath\src\utils") {
     }
 }
 
+# Dynamically discover all modular provider files in src/providers
+if (Test-Path "$providersPath\src\providers") {
+    Get-ChildItem -Path "$providersPath\src\providers" -Recurse -File | ForEach-Object {
+        $rel = $_.FullName.Substring($providersPath.Length + 1)
+        if ($sharedFiles -notcontains $rel) {
+            $sharedFiles += $rel
+        }
+    }
+}
+if (Test-Path "$stitchPath\src\providers") {
+    Get-ChildItem -Path "$stitchPath\src\providers" -Recurse -File | ForEach-Object {
+        $rel = $_.FullName.Substring($stitchPath.Length + 1)
+        if ($sharedFiles -notcontains $rel) {
+            $sharedFiles += $rel
+        }
+    }
+}
+
 $syncedCount = 0
 
 foreach ($relPath in $sharedFiles) {

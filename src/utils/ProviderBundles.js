@@ -189,5 +189,81 @@ export const ProviderBundles = {
         return await window.FourKHDHub.getPlayableStream(link, episodeNumber);
       };
     `
+  },
+
+  'tamildhool': {
+    posts: `
+      window.module.exports.getSearchPosts = async function({ searchQuery, providerContext }) {
+        if (window.TamilDhool) {
+          return await window.TamilDhool.search(searchQuery);
+        }
+        return [];
+      };
+    `,
+    meta: `
+      window.module.exports.getMeta = async function({ link, providerContext }) {
+        if (window.TamilDhool) {
+          return await window.TamilDhool.extractDetails(link);
+        }
+        return { title: 'TamilDhool Episode', linkList: [], episodes: [] };
+      };
+    `,
+    stream: `
+      window.module.exports.getStream = async function({ link, type, providerContext }) {
+        if (window.TamilDhool) {
+          const playable = await window.TamilDhool.getPlayableStream(link);
+          if (playable && playable.streamUrl) {
+            return [{ link: playable.streamUrl, quality: playable.quality || '720p', server: playable.server || 'TamilDhool Stream', headers: playable.headers }];
+          }
+        }
+        return [];
+      };
+    `,
+    playable: `
+      window.module.exports.getPlayableStream = async function({ link, episodeNumber, seasonNumber, providerContext }) {
+        if (window.TamilDhool) {
+          return await window.TamilDhool.getPlayableStream(link, false, episodeNumber, seasonNumber);
+        }
+        return null;
+      };
+    `
+  },
+
+  'tamilgun': {
+    posts: `
+      window.module.exports.getSearchPosts = async function({ searchQuery, providerContext }) {
+        if (window.TamilGun) {
+          return await window.TamilGun.search(searchQuery);
+        }
+        return [];
+      };
+    `,
+    meta: `
+      window.module.exports.getMeta = async function({ link, providerContext }) {
+        if (window.TamilGun) {
+          return await window.TamilGun.extractDetails(link);
+        }
+        return { title: 'TamilGun Episode', linkList: [], episodes: [] };
+      };
+    `,
+    stream: `
+      window.module.exports.getStream = async function({ link, type, providerContext }) {
+        if (window.TamilGun) {
+          const playable = await window.TamilGun.getPlayableStream(link);
+          if (playable && playable.streamUrl) {
+            return [{ link: playable.streamUrl, quality: playable.quality || '720p', server: playable.server || 'TamilGun Stream', headers: playable.headers }];
+          }
+        }
+        return [];
+      };
+    `,
+    playable: `
+      window.module.exports.getPlayableStream = async function({ link, episodeNumber, seasonNumber, providerContext }) {
+        if (window.TamilGun) {
+          return await window.TamilGun.getPlayableStream(link, false, episodeNumber, seasonNumber);
+        }
+        return null;
+      };
+    `
   }
 };

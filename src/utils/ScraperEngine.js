@@ -1,4 +1,6 @@
 import { Movies4u, Movies4uClient } from './Movies4uProvider.js';
+import { TamilDhool, TamilDhoolClient } from '../providers/tamildhool/index.js';
+import { TamilGun, TamilGunClient } from '../providers/tamilgun/index.js';
 // src/utils/ScraperEngine.js
 import { resolveDomain, resolveUrlWithDoh } from './DnsResolver.js';
 
@@ -2750,6 +2752,8 @@ globalObj.HDHub4u = HDHub4u;
 globalObj.FourKHDHub = FourKHDHub;
 globalObj.UniversalScraper = UniversalScraper;
 globalObj.Movies4u = Movies4u;
+globalObj.TamilDhool = TamilDhool;
+globalObj.TamilGun = TamilGun;
 globalObj.getPlayableStream = (url, ep, s) => UniversalScraper.getPlayableStream(url, ep, s);
 globalObj.calculateTitleMatchScore = calculateTitleMatchScore;
 globalObj.findBestMatch = findBestMatch;
@@ -2761,6 +2765,10 @@ export const selectBestStreamCandidate = (c) => ClientUtils.selectBestStreamCand
 export {
   Movies4u,
   Movies4uClient,
+  TamilDhool,
+  TamilDhoolClient,
+  TamilGun,
+  TamilGunClient,
   ClientUtils,
   FourKHDHub,
   FourKHDHubClient,

@@ -8,7 +8,10 @@ import {
   cleanTitleKeywords, 
   normalizeString 
 } from './ScraperEngine.js';
+import { TamilDhool } from '../providers/tamildhool/index.js';
+import { TamilGun } from '../providers/tamilgun/index.js';
 import { ProviderUpdateManager } from './ProviderUpdateManager.js';
+
 
 /**
  * ExtensionManager
@@ -46,7 +49,12 @@ class ExtensionManagerService {
   async getSearchPosts(provider, searchQuery) {
     console.log(`[ExtensionManager] Native search: "${searchQuery}" on ${provider}`);
     try {
-      const engine = provider === 'movies4u' ? Movies4u : (provider === '4khdhub' ? FourKHDHub : HDHub4u);
+      let engine;
+      if (provider === 'tamildhool' || provider === '4') engine = TamilDhool;
+      else if (provider === 'tamilgun' || provider === '5') engine = TamilGun;
+      else if (provider === 'movies4u' || provider === '3') engine = Movies4u;
+      else if (provider === '4khdhub' || provider === '2') engine = FourKHDHub;
+      else engine = HDHub4u;
       const results = await engine.search(searchQuery);
       return results.map(r => ({
         title: r.title,
@@ -241,9 +249,12 @@ class ExtensionManagerService {
    */
   async getMeta(provider, link, targetSeason = 1) {
     console.log(`[ExtensionManager] Native extract details: ${link} (Season ${targetSeason})`);
-    const engine = (link.includes('movies4u') || provider === 'movies4u')
-      ? Movies4u
-      : (link.includes('hdhub4u') ? HDHub4u : FourKHDHub);
+    let engine;
+    if (link.includes('tamildhool') || provider === 'tamildhool' || provider === '4') engine = TamilDhool;
+    else if (link.includes('tamilgun') || link.includes('arivumani') || provider === 'tamilgun' || provider === '5') engine = TamilGun;
+    else if (link.includes('movies4u') || provider === 'movies4u' || provider === '3') engine = Movies4u;
+    else if (link.includes('hdhub4u') || provider === 'hdhub4u' || provider === '1') engine = HDHub4u;
+    else engine = FourKHDHub;
     
     const details = await engine.extractDetails(link, targetSeason);
     return {
@@ -262,7 +273,12 @@ class ExtensionManagerService {
    * Direct 1-Click Playable Stream for Media3 ExoPlayer
    */
   async getPlayableStream(provider, link, isTVShow = false, episodeNumber = 1, seasonNumber = 1) {
-    const engine = (link.includes('movies4u') || provider === 'movies4u') ? Movies4u : (link.includes('4khdhub') ? FourKHDHub : HDHub4u);
+    let engine;
+    if (link.includes('tamildhool') || provider === 'tamildhool' || provider === '4') engine = TamilDhool;
+    else if (link.includes('tamilgun') || link.includes('arivumani') || provider === 'tamilgun' || provider === '5') engine = TamilGun;
+    else if (link.includes('movies4u') || provider === 'movies4u' || provider === '3') engine = Movies4u;
+    else if (link.includes('4khdhub') || provider === '4khdhub' || provider === '2') engine = FourKHDHub;
+    else engine = HDHub4u;
     return await engine.getPlayableStream(link, isTVShow, episodeNumber, seasonNumber);
   }
 
@@ -357,6 +373,32 @@ class ExtensionManagerService {
           });
         }
         return streamList;
+      }
+    }
+
+    if (link.includes('tamildhool.') || provider === 'tamildhool' || provider === '4') {
+      const playable = await TamilDhool.getPlayableStream(link, isTV, episodeNumber, seasonNumber);
+      if (playable && playable.streamUrl) {
+        return [{
+          link: playable.streamUrl,
+          quality: playable.quality || '720p',
+          server: playable.server || 'TamilDhool Stream',
+          headers: playable.headers,
+          mimeType: playable.mimeType
+        }];
+      }
+    }
+
+    if (link.includes('tamilgun.') || link.includes('arivumani.') || provider === 'tamilgun' || provider === '5') {
+      const playable = await TamilGun.getPlayableStream(link, isTV, episodeNumber, seasonNumber);
+      if (playable && playable.streamUrl) {
+        return [{
+          link: playable.streamUrl,
+          quality: playable.quality || '720p',
+          server: playable.server || 'TamilGun Stream',
+          headers: playable.headers,
+          mimeType: playable.mimeType
+        }];
       }
     }
 
@@ -475,7 +517,10 @@ class ExtensionManagerService {
             console.log(`[ExtensionManager] Utilizing [Server:10Gbps] Google CDN fallback stream from ${matchedProvider}`);
           }
           const supports206 = playable.supports206 ?? !isGoogleCdn;
-          const serverLabel = matchedProvider === 'movies4u' ? 'Server 3 (Movies4u)' : (matchedProvider === '4khdhub' ? 'Server 2 (4KHDHub)' : 'Server 1 (HDHub4u)');
+          const serverLabel = matchedProvider === 'tamildhool' ? 'Server 4 (TamilDhool)' 
+            : (matchedProvider === 'tamilgun' ? 'Server 5 (TamilGun)' 
+            : (matchedProvider === 'movies4u' ? 'Server 3 (Movies4u)' 
+            : (matchedProvider === '4khdhub' ? 'Server 2 (4KHDHub)' : 'Server 1 (HDHub4u)')));
           
           // Strictly default playback to 1080p if available among resolved stream qualities
           const qualities = { ...(playable.qualities || {}) };
@@ -580,6 +625,10 @@ class ExtensionManagerService {
       provider = '4khdhub';
     } else if (server === 3 || server === '3' || server === 'movies4u') {
       provider = 'movies4u';
+    } else if (server === 4 || server === '4' || server === 'tamildhool') {
+      provider = 'tamildhool';
+    } else if (server === 5 || server === '5' || server === 'tamilgun') {
+      provider = 'tamilgun';
     }
 
     return this.findAndResolvePlayableStream({
@@ -592,6 +641,19 @@ class ExtensionManagerService {
       provider,
       allowCrossProviderFallback: false
     });
+  }
+
+  /**
+   * High-accuracy Serial & Date Finder for Media3 Player
+   * Finds daily serial episodes on TamilDhool or TamilGun / Arivumani
+   * @param {string} serialName e.g. "Kayal", "Siragadikka Aasai", "Bigg Boss"
+   * @param {string} [dateStr] e.g. "15-09-2026", "yesterday", "today"
+   * @param {string} [channel] e.g. "Sun TV", "Vijay TV"
+   * @param {string|number} [provider] 'tamildhool' (Server 4) or 'tamilgun' (Server 5)
+   */
+  async findEpisodeByDate(serialName, dateStr, channel, provider = 'tamildhool') {
+    const active = (provider === 'tamilgun' || provider === 5 || provider === '5') ? TamilGun : TamilDhool;
+    return await active.findEpisodeByDate(serialName, dateStr, channel);
   }
 
   /**
@@ -629,6 +691,8 @@ export {
   HDHub4u,
   FourKHDHub,
   UniversalScraper,
+  TamilDhool,
+  TamilGun,
   calculateTitleMatchScore,
   findBestMatch,
   cleanTitleKeywords,
