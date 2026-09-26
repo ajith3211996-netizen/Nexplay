@@ -9,6 +9,7 @@ export default function BottomTabBar({ activeTab = 'Home', onTabPress }) {
     { name: 'Home', iconActive: 'home', iconInactive: 'home-outline', label: 'Home' },
     { name: 'Movies', iconActive: 'film', iconInactive: 'film-outline', label: 'Movies' },
     { name: 'TV Series', iconActive: 'tv', iconInactive: 'tv-outline', label: 'TV Series' },
+    { name: 'TV Serials', iconActive: 'albums', iconInactive: 'albums-outline', label: 'TV Serials' },
     { name: 'Search', iconActive: 'search', iconInactive: 'search-outline', label: 'Search' },
     { name: 'Account', iconActive: 'person', iconInactive: 'person-outline', label: 'Account' },
   ];
@@ -47,10 +48,11 @@ export default function BottomTabBar({ activeTab = 'Home', onTabPress }) {
               >
                 <Ionicons
                   name={iconName}
-                  size={scale(20)}
+                  size={scale(18)}
                   color={tintColor}
                 />
                 <Text 
+                  numberOfLines={1}
                   style={[
                     styles.tabLabel, 
                     { color: tintColor, fontWeight: isActive ? '700' : '500' }
@@ -76,14 +78,14 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: scale(16),
+    paddingHorizontal: scale(12),
     zIndex: 999,
   },
   glassContainer: {
     width: '100%',
     borderRadius: scale(38),
     overflow: 'hidden',
-    backgroundColor: 'rgba(18, 18, 24, 0.58)', // Pure semi-transparent frosted glass
+    backgroundColor: 'rgba(18, 18, 24, 0.65)', // Pure semi-transparent frosted glass
     borderWidth: 1.2,
     borderColor: 'rgba(255, 255, 255, 0.18)',
     borderTopColor: 'rgba(255, 255, 255, 0.32)',
@@ -98,26 +100,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    paddingVertical: verticalScale(6),
-    paddingHorizontal: scale(8),
+    paddingVertical: verticalScale(5),
+    paddingHorizontal: scale(6),
   },
   tabButton: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: verticalScale(6),
-    paddingHorizontal: scale(4),
-    borderRadius: scale(24),
+    paddingVertical: verticalScale(5),
+    paddingHorizontal: scale(2),
+    borderRadius: scale(20),
   },
   tabButtonActive: {
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    backgroundColor: 'rgba(56, 189, 248, 0.14)',
     borderWidth: 1,
     borderColor: 'rgba(56, 189, 248, 0.28)',
   },
   tabLabel: {
-    fontSize: moderateScale(9.5),
+    fontSize: moderateScale(8.5),
     marginTop: verticalScale(2),
-    letterSpacing: 0.1,
+    letterSpacing: 0,
+    textAlign: 'center',
   },
   activeDot: {
     width: scale(3.5),
