@@ -207,6 +207,12 @@ class VLCPlayerView(context: ThemedReactContext) :
                 updateFrameSizeFromMedia()
                 pushNowPlaying()
                 emitState("onPlaying", "Playing")
+                Arguments.createMap().apply {
+                    putString("type", "Buffering")
+                    putDouble("bufferRate", 100.0)
+                    putBoolean("isBuffering", false)
+                    emit("onBuffer", this)
+                }
             }
             MediaPlayer.Event.Opening -> {
                 val player = mediaPlayer
@@ -229,7 +235,7 @@ class VLCPlayerView(context: ThemedReactContext) :
             MediaPlayer.Event.Buffering -> {
                 // Use a safe call: a Buffering event can arrive after release (unmount,
                 // source switch), and with no player we must not force-unwrap.
-                val isBuffering = mediaPlayer?.isPlaying != true
+                val isBuffering = event.buffering < 100f && mediaPlayer?.isPlaying != true
                 Arguments.createMap().apply {
                     putString("type", "Buffering")
                     putDouble("bufferRate", event.buffering.toDouble())
@@ -293,7 +299,7 @@ class VLCPlayerView(context: ThemedReactContext) :
 
     private fun createPlayer(autoplay: Boolean) {
         releasePlayer()
-        val surfaceTexture = surfaceTexture ?: return
+        val surfaceTexture = this.surfaceTexture ?: savedSurfaceTexture ?: return
         savedSurfaceTexture = surfaceTexture
         val src = srcMap ?: return
         try {
@@ -397,16 +403,7 @@ class VLCPlayerView(context: ThemedReactContext) :
         mediaPlayer = null
         lib.release()
         libvlc = null
-        savedSurfaceTexture?.let { st ->
-            try {
-                if (!st.isReleased) {
-                    st.release()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error releasing savedSurfaceTexture", e)
-            }
-        }
-        savedSurfaceTexture = null
+
     }
 
     // ---- Public API (called from the manager) ----

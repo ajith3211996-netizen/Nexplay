@@ -1139,76 +1139,43 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       setQualityMode(targetQ);
     }
     setPlaybackError(null);
+    const safeStreamUrl = sanitizePlayableUrl(streamUrl);
+
+    // 1. If stream URL is identical to the currently playing stream, simply update quality mode without reloading
+    if (safeStreamUrl === currentSourceUri) {
+      console.log(`[MovieDetailScreen] Quality ${targetQ.toUpperCase()} is already active on current stream.`);
+      setIsBuffering(false);
+      isBufferingRef.current = false;
+      setHasFirstFrameRendered(true);
+      resetControlsTimeout();
+      return;
+    }
+
+    // 2. Stream URL has changed (different fidelity stream)
     setHasFirstFrameRendered(false);
     setIsBuffering(true);
     isBufferingRef.current = true;
     const previousTime = (typeof player.currentTime === 'number' && player.currentTime > 0 ? player.currentTime : (currentTimeRef.current || currentTime)) || 0;
-    
-    console.log(`[MovieDetailScreen] ⚡ Seamless switch to ${targetQ.toUpperCase()} stream at position ${previousTime.toFixed(1)}s: ${streamUrl}`);
+    lastSavedSeekTimeRef.current = previousTime;
+
+    console.log(`[MovieDetailScreen] ? Seamless switch to ${targetQ.toUpperCase()} stream at position ${previousTime.toFixed(1)}s: ${safeStreamUrl}`);
     try {
-      // 1. Clear previous track overrides to prevent mismatched TrackGroup index crashes
       hasAutoSelectedDefaultAudio.current = false;
       setSelectedAudioTrack(null);
       setSelectedSubtitleTrack(null);
       setAvailableAudioTracks([]);
       setAvailableSubtitleTracks([]);
 
-      const safeStreamUrl = sanitizePlayableUrl(streamUrl);
-      const isHls = safeStreamUrl.toLowerCase().includes('.m3u8');
-      const isDirectCdn = safeStreamUrl.includes('pixeldrain') || 
-                          safeStreamUrl.includes('googleusercontent.com') ||
-                          safeStreamUrl.includes('cloudflarestorage.com') ||
-                          safeStreamUrl.includes('r2.dev') ||
-                          safeStreamUrl.includes('X-Amz-') ||
-                          safeStreamUrl.includes('fastdl') ||
-                          safeStreamUrl.includes('bunker.monster') || safeStreamUrl.includes('workers.dev');
-
-      const isM4u = safeStreamUrl.includes('dramiyos') || safeStreamUrl.includes('m4uplay');
-      const defaultReferer = isM4u ? 'https://m4uplay.store/' : 'https://gamerxyt.com/';
-      const videoSource = {
-        uri: safeStreamUrl,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          ...(!isDirectCdn ? { 'Referer': defaultReferer } : {})
-        },
-        contentType: isHls ? 'hls' : 'auto'
-      };
-
       currentStreamInfoRef.current = {
         streamUrl: safeStreamUrl,
-        targetQuality: targetQ,
-        videoSource
+        targetQuality: targetQ
       };
-
 
       player.replace(safeStreamUrl);
       setIsPlaying(true);
       player.play();
-
-      if (previousTime > 0.5) {
-        setTimeout(() => {
-          try {
-            vlcPlayerRef.current?.seek(previousTime);
-          } catch (tErr) {}
-        }, 300);
-      }
     } catch (e) {
       console.warn("[MovieDetailScreen] playResolvedLink error:", e);
-      if (isMounted.current && player) {
-        try {
-          const safeStreamUrl = sanitizePlayableUrl(streamUrl);
-          if (typeof player.replaceAsync === 'function') {
-            await player.replaceAsync(safeStreamUrl);
-          } else {
-            player.replace(safeStreamUrl);
-          }
-          if (previousTime > 0.5) {
-            try { player.currentTime = previousTime; } catch (e) {}
-          }
-          player.play();
-          setIsPlaying(true);
-        } catch (fallbackErr) {}
-      }
     }
     resetControlsTimeout();
   };
