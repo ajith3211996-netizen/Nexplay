@@ -8,15 +8,19 @@ import {
   Dimensions,
   Animated,
   Image,
-  Modal
+  Modal,
+  TextInput,
+  ActivityIndicator,
+  StatusBar
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
+import VLCPlayerView from '@lunarr/vlc-player';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { scale, verticalScale, moderateScale } from '../utils/responsive';
 import {
   SERVERS,
   CHANNELS,
-  REALITY_SHOWS_CACHE,
   getCachedSerialsForServer,
   findSerial
 } from '../utils/TvSerialsMetadataCache';
@@ -24,7 +28,7 @@ import {
 const { width: windowWidth } = Dimensions.get('window');
 
 // Channel Logo component with latest official branding + reliable fallback
-function ChannelLogo({ channelCode, size = scale(18), style }) {
+function ChannelLogo({ channelCode, size = scale(16), style }) {
   const channel = CHANNELS.find(c => c.code === channelCode || c.id === channelCode);
   const [hasError, setHasError] = useState(false);
 
@@ -38,12 +42,11 @@ function ChannelLogo({ channelCode, size = scale(18), style }) {
     );
   }
 
-  // Fallback to high-fidelity vector emblems with official channel brand colors
   switch (channelCode) {
     case 'sun':
       return <Ionicons name="sunny" size={size} color="#f59e0b" style={style} />;
     case 'vijay':
-      return <FontAwesome5 name="star" size={size * 0.9} color="#ef4444" style={style} />;
+      return <FontAwesome5 name="star" size={size * 0.85} color="#ef4444" style={style} />;
     case 'zee':
       return <MaterialCommunityIcons name="weather-sunset-up" size={size} color="#a855f7" style={style} />;
     case 'ktv':
@@ -53,29 +56,46 @@ function ChannelLogo({ channelCode, size = scale(18), style }) {
   }
 }
 
-export default function TvSerialsScreen({ onMoviePress }) {
-  // Top Navbar Server State: Server 1 (Tamildhool) vs Server 2 (Tamilgun)
+export default function TvSerialsScreen() {
+  // Step 1: Active Server (Server 1: Tamildhool vs Server 2: Tamilgun)
   const [activeServerId, setActiveServerId] = useState('tamildhool');
   const activeServer = SERVERS.find(s => s.id === activeServerId) || SERVERS[0];
 
-  // Active Catalog Filter & Hero Carousel State
-  const [selectedChannelId, setSelectedChannelId] = useState('all');
-  const [heroIndex, setHeroIndex] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
+  // Serials for selected server
+  const allServerSerials = useMemo(() => {
+    return getCachedSerialsForServer(activeServerId);
+  }, [activeServerId]);
 
-  // Detail / Decryptor Sandbox State (when user clicks any serial)
-  const [sandboxVisible, setSandboxVisible] = useState(false);
-  const [sandboxChannel, setSandboxChannel] = useState(CHANNELS[0]);
-  const [sandboxSerial, setSandboxSerial] = useState(null);
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+  // Step 2: Selected Serial
+  const [selectedSerial, setSelectedSerial] = useState(allServerSerials[0]);
+  const [dropdownVisible, setDropdownVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // Calendar State for Step 3
+  // Keep selected serial in sync when server changes
+  useEffect(() => {
+    const list = getCachedSerialsForServer(activeServerId);
+    if (list && list.length > 0) {
+      setSelectedSerial(list[0]);
+    }
+  }, [activeServerId]);
+
+  // Step 3: Calendar Date Picker State
   const [currentCalendarDate, setCurrentCalendarDate] = useState(new Date(2026, 8, 25)); // Sep 25, 2026
   const [selectedDay, setSelectedDay] = useState(25);
 
-  // Pulse animation for Live Broadcast dot & Decryptor Engine ring
+  // In-Screen VLC Player State (DO NOT jump to movie details screen)
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlayerActive, setIsPlayerActive] = useState(false);
+  const [isLoadingStream, setIsLoadingStream] = useState(false);
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const [playbackDuration, setPlaybackDuration] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const vlcPlayerRef = useRef(null);
+  const controlsTimeoutRef = useRef(null);
+
+  // Pulse animation for Client Decryptor Engine node
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const rotateAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.loop(
@@ -92,81 +112,7 @@ export default function TvSerialsScreen({ onMoviePress }) {
         }),
       ])
     ).start();
-
-    Animated.loop(
-      Animated.timing(rotateAnim, {
-        toValue: 1,
-        duration: 8000,
-        useNativeDriver: true,
-      })
-    ).start();
-  }, [pulseAnim, rotateAnim]);
-
-  // Serials list from active server cache
-  const serverSerials = useMemo(() => {
-    return getCachedSerialsForServer(activeServerId);
-  }, [activeServerId]);
-
-  // Auto-rotate hero carousel
-  useEffect(() => {
-    if (isPaused || sandboxVisible) return;
-    const timer = setInterval(() => {
-      setHeroIndex((prev) => (prev + 1) % serverSerials.length);
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [isPaused, sandboxVisible, serverSerials.length]);
-
-  const currentHero = serverSerials[heroIndex] || serverSerials[0];
-
-  // Open Sandbox for clicked serial
-  const handleOpenSandbox = (item) => {
-    const channelObj = CHANNELS.find(c => c.code === item.channelCode) || CHANNELS[0];
-    setSandboxChannel(channelObj);
-    setSandboxSerial(item);
-    setSandboxVisible(true);
-  };
-
-  // Launch Playback from Sandbox or Quick Play
-  const handlePlayStream = (item, chosenDate) => {
-    const targetDateStr = chosenDate 
-      ? `${chosenDate} ${currentCalendarDate.toLocaleString('default', { month: 'short' })} ${currentCalendarDate.getFullYear()}`
-      : 'Latest Broadcast';
-
-    if (onMoviePress) {
-      onMoviePress({
-        id: `${activeServer.id}_${item.serialCode || item.id}_${chosenDate || 25}`,
-        title: `${item.title} - ${targetDateStr}`,
-        name: `${item.title} - ${targetDateStr}`,
-        original_name: item.title,
-        tamilTitle: item.tamilTitle,
-        overview: `${item.title} (${item.tamilTitle}) airing on ${item.channel}. Decrypted stream via ${activeServer.name}.`,
-        channel: item.channel,
-        channelCode: item.channelCode,
-        server: activeServer.id,
-        broadcastDate: targetDateStr,
-        media_type: 'tv',
-        original_language: 'ta',
-        first_air_date: '2026-09-25',
-        poster_path: item.posterUrl || null,
-        backdrop_path: item.backdropUrl || null
-      });
-    }
-  };
-
-  // Channel filter for catalog
-  const filteredSerials = selectedChannelId === 'all'
-    ? serverSerials
-    : serverSerials.filter(s => s.channelCode === selectedChannelId);
-
-  const filteredReality = selectedChannelId === 'all'
-    ? REALITY_SHOWS_CACHE
-    : REALITY_SHOWS_CACHE.filter(r => r.channelCode === selectedChannelId);
-
-  // Available serials for Sandbox Step 2 based on sandboxChannel
-  const sandboxAvailableSerials = useMemo(() => {
-    const list = serverSerials.filter(s => s.channelCode === sandboxChannel.code);
-    return list.length > 0 ? list : serverSerials;
-  }, [serverSerials, sandboxChannel]);
+  }, [pulseAnim]);
 
   // Calendar Helpers for Step 3
   const year = currentCalendarDate.getFullYear();
@@ -183,133 +129,345 @@ export default function TvSerialsScreen({ onMoviePress }) {
   };
 
   const calendarDays = [];
-  // Empty slots before 1st day of month
   for (let i = 0; i < firstDayIndex; i++) {
     calendarDays.push({ day: null, key: `empty-${i}` });
   }
-  // Days of month
   for (let d = 1; d <= daysInMonth; d++) {
     calendarDays.push({ day: d, key: `day-${d}` });
   }
 
-  // -------------------------------------------------------------
-  // RENDER: INSIDE TV SERIALS SANDBOX VIEW (Matched to attached screenshot)
-  // -------------------------------------------------------------
-  if (sandboxVisible && sandboxSerial) {
-    return (
+  // Filter serials in dropdown by search query
+  const filteredDropdownSerials = useMemo(() => {
+    if (!searchQuery.trim()) return allServerSerials;
+    const q = searchQuery.toLowerCase().trim();
+    return allServerSerials.filter(
+      s => s.title.toLowerCase().includes(q) ||
+           (s.tamilTitle && s.tamilTitle.includes(q)) ||
+           s.channel.toLowerCase().includes(q)
+    );
+  }, [allServerSerials, searchQuery]);
+
+  // Handle Play Episode directly inside TV Serials (No jump to Movie Details)
+  const handlePlayEpisode = (dayNum = selectedDay) => {
+    setSelectedDay(dayNum);
+    setIsLoadingStream(true);
+    setIsPlayerActive(true);
+    setIsPlaying(true);
+
+    // Auto-hide stream loader after brief decryptor sync
+    setTimeout(() => {
+      setIsLoadingStream(false);
+    }, 600);
+  };
+
+  // Fullscreen toggle handler
+  const toggleFullscreen = async () => {
+    if (!isFullscreen) {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+      setIsFullscreen(true);
+    } else {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+      setIsFullscreen(false);
+    }
+  };
+
+  const handleSeek = (delta) => {
+    if (!vlcPlayerRef.current || playbackDuration <= 0) return;
+    const newTime = Math.max(0, Math.min(playbackDuration, playbackTime + delta));
+    const targetPos = newTime / playbackDuration;
+    vlcPlayerRef.current.seek(targetPos);
+    setPlaybackTime(newTime);
+  };
+
+  const formatTime = (seconds) => {
+    if (!seconds || isNaN(seconds)) return '00:00';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
+  // Active Stream Source
+  const activeStreamSource = useMemo(() => {
+    if (!selectedSerial) return null;
+    return {
+      uri: selectedSerial.streamUrl || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+      initOptions: [
+        '--network-caching=1500',
+        '--live-caching=1500',
+        '--drop-late-frames',
+        '--skip-frames'
+      ]
+    };
+  }, [selectedSerial, activeServerId, selectedDay]);
+
+  return (
+    <View style={styles.screenWrapper}>
+      <StatusBar barStyle="light-content" backgroundColor="#080c14" />
+
+      {/* FULLSCREEN VIDEO PLAYER MODAL */}
+      {isFullscreen && isPlayerActive && (
+        <Modal visible={isFullscreen} transparent={false} animationType="none">
+          <View style={styles.fullscreenContainer}>
+            <VLCPlayerView
+              ref={vlcPlayerRef}
+              source={activeStreamSource}
+              autoplay={true}
+              paused={!isPlaying}
+              style={StyleSheet.absoluteFill}
+              onProgress={(event) => {
+                setPlaybackTime(event.currentTime / 1000);
+                if (event.duration > 0) setPlaybackDuration(event.duration / 1000);
+              }}
+            />
+
+            {/* Fullscreen Overlay Controls */}
+            <TouchableOpacity
+              style={StyleSheet.absoluteFill}
+              activeOpacity={1}
+              onPress={() => setShowControls(prev => !prev)}
+            >
+              {showControls && (
+                <View style={styles.fullscreenControls}>
+                  <View style={styles.fullscreenTopBar}>
+                    <TouchableOpacity onPress={toggleFullscreen} style={styles.playerTopBtn}>
+                      <Ionicons name="arrow-back" size={scale(22)} color="#ffffff" />
+                    </TouchableOpacity>
+                    <Text style={styles.fullscreenTitle} numberOfLines={1}>
+                      {selectedSerial?.title} • {selectedDay} {monthName} ({activeServer.shortName})
+                    </Text>
+                  </View>
+
+                  <View style={styles.fullscreenCenterControls}>
+                    <TouchableOpacity onPress={() => handleSeek(-10)} style={styles.seekBtn}>
+                      <Ionicons name="play-back" size={scale(28)} color="#ffffff" />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      onPress={() => setIsPlaying(prev => !prev)}
+                      style={styles.mainPlayBtn}
+                    >
+                      <Ionicons name={isPlaying ? 'pause' : 'play'} size={scale(36)} color="#ffffff" />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity onPress={() => handleSeek(10)} style={styles.seekBtn}>
+                      <Ionicons name="play-forward" size={scale(28)} color="#ffffff" />
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.fullscreenBottomBar}>
+                    <Text style={styles.timeText}>{formatTime(playbackTime)}</Text>
+                    <View style={styles.progressBarBg}>
+                      <View
+                        style={[
+                          styles.progressBarFill,
+                          { width: `${playbackDuration > 0 ? (playbackTime / playbackDuration) * 100 : 0}%` }
+                        ]}
+                      />
+                    </View>
+                    <Text style={styles.timeText}>{formatTime(playbackDuration)}</Text>
+                    <TouchableOpacity onPress={toggleFullscreen} style={{ marginLeft: scale(10) }}>
+                      <Ionicons name="contract" size={scale(20)} color="#ffffff" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+        </Modal>
+      )}
+
       <ScrollView
-        style={styles.sandboxContainer}
-        contentContainerStyle={styles.sandboxScrollContent}
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Top Back & Server Indicator Bar */}
-        <View style={styles.sandboxTopNav}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => setSandboxVisible(false)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="arrow-back" size={scale(20)} color="#ffffff" />
-            <Text style={styles.backButtonText}>Serials Catalog</Text>
-          </TouchableOpacity>
+        {/* ============================================================== */}
+        {/* TOP HERO CONTAINER: IN-SCREEN VLC PLAYER OR DECRYPTOR STATUS NODES */}
+        {/* ============================================================== */}
+        <View style={styles.heroSection}>
+          {isPlayerActive ? (
+            /* Live In-Screen VLC Player (No jump to Movie Details!) */
+            <View style={styles.playerBox}>
+              <VLCPlayerView
+                ref={vlcPlayerRef}
+                source={activeStreamSource}
+                autoplay={true}
+                paused={!isPlaying}
+                style={StyleSheet.absoluteFill}
+                onProgress={(event) => {
+                  setPlaybackTime(event.currentTime / 1000);
+                  if (event.duration > 0) setPlaybackDuration(event.duration / 1000);
+                }}
+              />
 
-          <View style={styles.serverPillBadge}>
-            <View style={[styles.serverStatusDot, { backgroundColor: '#22c55e' }]} />
-            <Text style={styles.serverPillText}>{activeServer.displayName}</Text>
-          </View>
-        </View>
-
-        {/* 1. TOP HERO CONTAINER (Dark grid theme with 3 circular status nodes) */}
-        <View style={styles.sandboxHero}>
-          <LinearGradient
-            colors={['#080b14', '#0d1322', '#090d18']}
-            style={styles.sandboxHeroGradient}
-          >
-            <View style={styles.nodesRow}>
-              {/* Node 1: Tamil Server Source */}
-              <View style={styles.nodeItem}>
-                <View style={styles.nodeCircle}>
-                  <Ionicons name="server-outline" size={scale(22)} color="#94a3b8" />
+              {isLoadingStream && (
+                <View style={styles.loaderOverlay}>
+                  <ActivityIndicator size="large" color="#38bdf8" />
+                  <Text style={styles.loaderText}>Decrypting {activeServer.shortName} Stream...</Text>
                 </View>
-                <Text style={styles.nodeLabel}>Tamil Server Source</Text>
-                <Text style={styles.nodeSubLabel}>{activeServer.name}</Text>
+              )}
+
+              {/* Player Top Overlay Info Bar */}
+              <View style={styles.playerOverlayTop}>
+                <View style={styles.playerServerBadge}>
+                  <View style={[styles.statusDot, { backgroundColor: '#22c55e' }]} />
+                  <Text style={styles.playerServerBadgeText}>
+                    {activeServer.shortName} • {selectedDay} {monthName}
+                  </Text>
+                </View>
+
+                <View style={styles.playerTopActions}>
+                  <TouchableOpacity
+                    style={styles.playerIconButton}
+                    onPress={toggleFullscreen}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="expand" size={scale(16)} color="#ffffff" />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.playerIconButton, { marginLeft: scale(6) }]}
+                    onPress={() => {
+                      setIsPlaying(false);
+                      setIsPlayerActive(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="close" size={scale(16)} color="#ffffff" />
+                  </TouchableOpacity>
+                </View>
               </View>
 
-              {/* Node 2: Client Decryptor Engine (Prominent center) */}
-              <View style={[styles.nodeItem, { marginTop: verticalScale(14) }]}>
-                <View style={[styles.nodeCircle, styles.nodeCircleActive]}>
-                  <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-                    <Ionicons name="layers-outline" size={scale(26)} color="#38bdf8" />
-                  </Animated.View>
-                </View>
-                <Text style={[styles.nodeLabel, { color: '#ffffff' }]}>Client Decryptor Engine</Text>
-                <Text style={[styles.nodeSubLabel, { color: '#38bdf8' }]}>Active Decryptor</Text>
-              </View>
+              {/* Player Bottom Control Bar */}
+              <View style={styles.playerOverlayBottom}>
+                <TouchableOpacity
+                  onPress={() => setIsPlaying(prev => !prev)}
+                  style={styles.miniPlayBtn}
+                >
+                  <Ionicons name={isPlaying ? 'pause' : 'play'} size={scale(16)} color="#ffffff" />
+                </TouchableOpacity>
 
-              {/* Node 3: Stream Output Sandbox */}
-              <View style={styles.nodeItem}>
-                <View style={styles.nodeCircle}>
-                  <Ionicons name="videocam-outline" size={scale(22)} color="#94a3b8" />
+                <TouchableOpacity onPress={() => handleSeek(-10)} style={{ marginHorizontal: scale(8) }}>
+                  <Ionicons name="play-back" size={scale(16)} color="#cbd5e1" />
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={() => handleSeek(10)} style={{ marginRight: scale(10) }}>
+                  <Ionicons name="play-forward" size={scale(16)} color="#cbd5e1" />
+                </TouchableOpacity>
+
+                <View style={styles.miniProgressBarBg}>
+                  <View
+                    style={[
+                      styles.miniProgressBarFill,
+                      { width: `${playbackDuration > 0 ? (playbackTime / playbackDuration) * 100 : 0}%` }
+                    ]}
+                  />
                 </View>
-                <Text style={styles.nodeLabel}>Stream Output Sandbox</Text>
-                <Text style={styles.nodeSubLabel}>HLS Output</Text>
+
+                <Text style={styles.miniTimeText}>
+                  {formatTime(playbackTime)} / {formatTime(playbackDuration)}
+                </Text>
               </View>
             </View>
-          </LinearGradient>
+          ) : (
+            /* Screenshot-matched 3 Status Circles Hero */
+            <LinearGradient
+              colors={['#080b14', '#0d1322', '#090d18']}
+              style={styles.nodesHeroGradient}
+            >
+              <View style={styles.nodesRow}>
+                {/* Node 1: Tamil Server Source */}
+                <View style={styles.nodeItem}>
+                  <View style={styles.nodeCircle}>
+                    <Ionicons name="server-outline" size={scale(22)} color="#94a3b8" />
+                  </View>
+                  <Text style={styles.nodeLabel}>Tamil Server Source</Text>
+                  <Text style={styles.nodeSubLabel}>{activeServer.displayName}</Text>
+                </View>
+
+                {/* Node 2: Client Decryptor Engine (Center prominent) */}
+                <View style={[styles.nodeItem, { marginTop: verticalScale(14) }]}>
+                  <View style={[styles.nodeCircle, styles.nodeCircleActive]}>
+                    <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                      <Ionicons name="layers-outline" size={scale(26)} color="#38bdf8" />
+                    </Animated.View>
+                  </View>
+                  <Text style={[styles.nodeLabel, { color: '#ffffff' }]}>Client Decryptor Engine</Text>
+                  <Text style={[styles.nodeSubLabel, { color: '#38bdf8' }]}>AES-CBC Ready</Text>
+                </View>
+
+                {/* Node 3: Stream Output Sandbox */}
+                <View style={styles.nodeItem}>
+                  <View style={styles.nodeCircle}>
+                    <Ionicons name="videocam-outline" size={scale(22)} color="#94a3b8" />
+                  </View>
+                  <Text style={styles.nodeLabel}>Stream Output Sandbox</Text>
+                  <Text style={styles.nodeSubLabel}>HLS 1080p</Text>
+                </View>
+              </View>
+            </LinearGradient>
+          )}
         </View>
 
-        {/* Metrics Status Bar (Target Channel, Index Latency, Payload Protocol) */}
-        <View style={styles.sandboxMetricsBar}>
-          <View style={styles.sandboxMetricCol}>
-            <Text style={styles.sandboxMetricLabel}>Target Channel</Text>
-            <Text style={styles.sandboxMetricValue}>{sandboxChannel.name}</Text>
+        {/* ============================================================== */}
+        {/* METRICS BAR: Target Channel, Index Latency, Payload Protocol */}
+        {/* ============================================================== */}
+        <View style={styles.metricsBar}>
+          <View style={styles.metricCol}>
+            <Text style={styles.metricLabel}>Target Channel</Text>
+            <Text style={styles.metricValue}>{selectedSerial?.channel || 'Sun TV'}</Text>
           </View>
 
-          <View style={styles.sandboxMetricCol}>
-            <Text style={styles.sandboxMetricLabel}>Index Latency</Text>
-            <Text style={styles.sandboxMetricValue}>0ms</Text>
+          <View style={styles.metricCol}>
+            <Text style={styles.metricLabel}>Index Latency</Text>
+            <Text style={styles.metricValue}>{activeServer.latency}</Text>
           </View>
 
-          <View style={styles.sandboxMetricCol}>
-            <Text style={styles.sandboxMetricLabel}>Payload Protocol</Text>
-            <Text style={[styles.sandboxMetricValue, { color: '#16a34a' }]}>
+          <View style={styles.metricCol}>
+            <Text style={styles.metricLabel}>Payload Protocol</Text>
+            <Text style={[styles.metricValue, { color: '#16a34a' }]}>
               {activeServer.protocol}
             </Text>
           </View>
         </View>
 
-        {/* Step 1 & Step 2 Row */}
-        <View style={styles.stepsWrapper}>
-          {/* Step 1: Select Broadcast Channel */}
+        {/* ============================================================== */}
+        {/* STEPS CONTAINER (1, 2, 3) */}
+        {/* ============================================================== */}
+        <View style={styles.stepsContainer}>
+          {/* ------------------------------------------------------------ */}
+          {/* STEP 1: BUTTON SERVER 1 (TAMILDHOOL) & SERVER 2 (TAMILGUN)   */}
+          {/* CHANNELS REMOVED AS REQUESTED                                */}
+          {/* ------------------------------------------------------------ */}
           <View style={styles.stepSection}>
-            <Text style={styles.stepTitle}>Step 1: Select Broadcast Channel</Text>
-            <View style={styles.channelsGrid}>
-              {CHANNELS.map((ch) => {
-                const isSelected = sandboxChannel.code === ch.code;
+            <Text style={styles.stepHeaderTitle}>Step 1: Select Server Source</Text>
+
+            <View style={styles.serversRow}>
+              {SERVERS.map((srv) => {
+                const isSelected = activeServerId === srv.id;
                 return (
                   <TouchableOpacity
-                    key={ch.code}
+                    key={srv.id}
                     style={[
-                      styles.channelButton,
-                      isSelected ? styles.channelButtonActive : styles.channelButtonInactive
+                      styles.serverSelectButton,
+                      isSelected ? styles.serverSelectButtonActive : styles.serverSelectButtonInactive
                     ]}
                     activeOpacity={0.8}
-                    onPress={() => {
-                      setSandboxChannel(ch);
-                      const matching = serverSerials.filter(s => s.channelCode === ch.code);
-                      if (matching.length > 0) {
-                        setSandboxSerial(matching[0]);
-                      }
-                    }}
+                    onPress={() => setActiveServerId(srv.id)}
                   >
-                    <ChannelLogo channelCode={ch.code} size={scale(16)} style={{ marginRight: scale(6) }} />
+                    <Ionicons
+                      name={isSelected ? 'shield-checkmark' : 'server-outline'}
+                      size={scale(16)}
+                      color={isSelected ? '#ffffff' : '#374151'}
+                      style={{ marginRight: scale(6) }}
+                    />
                     <Text
                       style={[
-                        styles.channelButtonText,
-                        isSelected ? styles.channelButtonTextActive : styles.channelButtonTextInactive
+                        styles.serverSelectButtonText,
+                        isSelected ? styles.serverSelectButtonTextActive : styles.serverSelectButtonTextInactive
                       ]}
+                      numberOfLines={1}
                     >
-                      {ch.name}
+                      {srv.displayName}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -317,58 +475,65 @@ export default function TvSerialsScreen({ onMoviePress }) {
             </View>
           </View>
 
-          {/* Step 2: Select Tamil Serial */}
+          {/* ------------------------------------------------------------ */}
+          {/* STEP 2: ALL SERIAL NAMES - EASY TO SELECT DROPDOWN LIST      */}
+          {/* ------------------------------------------------------------ */}
           <View style={[styles.stepSection, { marginTop: verticalScale(16) }]}>
-            <Text style={styles.stepTitle}>Step 2: Select Tamil Serial</Text>
+            <Text style={styles.stepHeaderTitle}>Step 2: Select Tamil Serial</Text>
 
             <TouchableOpacity
-              style={styles.dropdownSelector}
+              style={styles.dropdownBox}
               activeOpacity={0.8}
-              onPress={() => setDropdownOpen(true)}
+              onPress={() => setDropdownVisible(true)}
             >
-              <Text style={styles.dropdownSelectedText} numberOfLines={1}>
-                {sandboxSerial.title} ({sandboxSerial.timeSlot})
-              </Text>
+              <View style={styles.dropdownLeft}>
+                <ChannelLogo channelCode={selectedSerial?.channelCode} size={scale(16)} style={{ marginRight: scale(8) }} />
+                <Text style={styles.dropdownSelectedText} numberOfLines={1}>
+                  {selectedSerial?.title} ({selectedSerial?.timeSlot})
+                </Text>
+              </View>
               <Ionicons name="chevron-down" size={scale(18)} color="#4b5563" />
             </TouchableOpacity>
 
-            <Text style={styles.archiveTracksText}>
-              Available archive tracks: {sandboxSerial.episodesCount || '1240 episodes logged'}.
+            <Text style={styles.archiveSubtitle}>
+              Available archive tracks: {selectedSerial?.episodesCount || '1240 episodes logged'}.
             </Text>
           </View>
 
-          {/* Step 3: Select Broadcast Production Date */}
-          <View style={[styles.stepSection, { marginTop: verticalScale(20) }]}>
+          {/* ------------------------------------------------------------ */}
+          {/* STEP 3: SELECT BROADCAST PRODUCTION DATE (CALENDAR)          */}
+          {/* ------------------------------------------------------------ */}
+          <View style={[styles.stepSection, { marginTop: verticalScale(18) }]}>
             <View style={styles.calendarHeaderRow}>
-              <Text style={styles.stepTitle}>Step 3: Select Broadcast Production Date</Text>
+              <Text style={styles.stepHeaderTitle}>Step 3: Select Broadcast Production Date</Text>
 
-              <View style={styles.monthNavWrapper}>
+              <View style={styles.monthNav}>
                 <TouchableOpacity onPress={prevMonth} style={styles.monthNavBtn} activeOpacity={0.7}>
                   <Ionicons name="chevron-back" size={scale(14)} color="#374151" />
                 </TouchableOpacity>
-                <Text style={styles.monthNavText}>{monthName} {year}</Text>
+                <Text style={styles.monthNavLabel}>{monthName} {year}</Text>
                 <TouchableOpacity onPress={nextMonth} style={styles.monthNavBtn} activeOpacity={0.7}>
                   <Ionicons name="chevron-forward" size={scale(14)} color="#374151" />
                 </TouchableOpacity>
               </View>
             </View>
 
-            {/* Calendar Grid matching attached design */}
-            <View style={styles.calendarContainer}>
-              {/* Day of Week Row */}
-              <View style={styles.weekDaysRow}>
-                {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((dayName, idx) => (
-                  <View key={`weekday-${idx}`} style={styles.weekDayCell}>
-                    <Text style={styles.weekDayText}>{dayName}</Text>
+            {/* Calendar Grid matching screenshot */}
+            <View style={styles.calendarCard}>
+              {/* Day Names Header */}
+              <View style={styles.calendarWeekRow}>
+                {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((w, idx) => (
+                  <View key={`wk-${idx}`} style={styles.calendarWeekCell}>
+                    <Text style={styles.calendarWeekText}>{w}</Text>
                   </View>
                 ))}
               </View>
 
-              {/* Day Cells Grid (7 columns) */}
-              <View style={styles.daysGrid}>
+              {/* Days Grid (7 columns) */}
+              <View style={styles.calendarDaysGrid}>
                 {calendarDays.map((item) => {
                   if (item.day === null) {
-                    return <View key={item.key} style={styles.emptyDayCell} />;
+                    return <View key={item.key} style={styles.emptyGridCell} />;
                   }
 
                   const isSelected = selectedDay === item.day;
@@ -376,16 +541,16 @@ export default function TvSerialsScreen({ onMoviePress }) {
                     <TouchableOpacity
                       key={item.key}
                       style={[
-                        styles.dayCell,
-                        isSelected && styles.dayCellActive
+                        styles.gridDayCell,
+                        isSelected && styles.gridDayCellActive
                       ]}
                       activeOpacity={0.75}
-                      onPress={() => setSelectedDay(item.day)}
+                      onPress={() => handlePlayEpisode(item.day)}
                     >
                       <Text
                         style={[
-                          styles.dayCellText,
-                          isSelected && styles.dayCellTextActive
+                          styles.gridDayText,
+                          isSelected && styles.gridDayTextActive
                         ]}
                       >
                         {item.day}
@@ -397,821 +562,293 @@ export default function TvSerialsScreen({ onMoviePress }) {
             </View>
           </View>
 
-          {/* Action Button: Watch Episode Stream */}
-          <View style={styles.sandboxActionWrapper}>
+          {/* ACTION BUTTON: WATCH EPISODE DIRECTLY IN-SCREEN */}
+          <View style={styles.actionBtnWrapper}>
             <TouchableOpacity
-              style={styles.watchStreamBtn}
+              style={styles.watchStreamButton}
               activeOpacity={0.85}
-              onPress={() => handlePlayStream(sandboxSerial, selectedDay)}
+              onPress={() => handlePlayEpisode(selectedDay)}
             >
               <Ionicons name="play-circle" size={scale(20)} color="#ffffff" style={{ marginRight: scale(8) }} />
-              <Text style={styles.watchStreamBtnText}>
-                Watch {sandboxSerial.title} ({selectedDay} {monthName})
+              <Text style={styles.watchStreamButtonText}>
+                {isPlayerActive ? 'Reload Stream' : 'Watch Episode Stream'} ({selectedDay} {monthName})
               </Text>
             </TouchableOpacity>
           </View>
         </View>
+      </ScrollView>
 
-        {/* Modal for Selecting Serial (Dropdown Picker) */}
-        <Modal
-          visible={dropdownOpen}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setDropdownOpen(false)}
+      {/* ============================================================== */}
+      {/* MODAL DROPDOWN: ALL SERIAL NAMES (EASY TO SELECT)              */}
+      {/* ============================================================== */}
+      <Modal
+        visible={dropdownVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDropdownVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => setDropdownVisible(false)}
         >
-          <TouchableOpacity
-            style={styles.modalOverlay}
-            activeOpacity={1}
-            onPress={() => setDropdownOpen(false)}
-          >
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Choose {sandboxChannel.name} Serial</Text>
-              <ScrollView style={{ maxHeight: verticalScale(320) }}>
-                {sandboxAvailableSerials.map((s) => (
+          <View style={styles.modalSheet} onStartShouldSetResponder={() => true}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalSheetTitle}>Select Tamil Serial</Text>
+                <Text style={styles.modalSheetSubtitle}>
+                  {activeServer.displayName} • {allServerSerials.length} Serials Logged
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setDropdownVisible(false)}
+                style={styles.modalCloseBtn}
+              >
+                <Ionicons name="close" size={scale(20)} color="#374151" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Search Input for fast selection */}
+            <View style={styles.searchBar}>
+              <Ionicons name="search" size={scale(16)} color="#6b7280" style={{ marginRight: scale(6) }} />
+              <TextInput
+                placeholder="Search serial name or time..."
+                placeholderTextColor="#9ca3af"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                style={styles.searchInput}
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchQuery('')}>
+                  <Ionicons name="close-circle" size={scale(16)} color="#9ca3af" />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* List of All Serials */}
+            <ScrollView style={{ maxHeight: verticalScale(340) }} showsVerticalScrollIndicator={false}>
+              {filteredDropdownSerials.map((s) => {
+                const isSelected = selectedSerial?.id === s.id;
+                return (
                   <TouchableOpacity
                     key={s.id}
                     style={[
-                      styles.modalItem,
-                      sandboxSerial.id === s.id && styles.modalItemActive
+                      styles.serialOptionItem,
+                      isSelected && styles.serialOptionItemActive
                     ]}
+                    activeOpacity={0.75}
                     onPress={() => {
-                      setSandboxSerial(s);
-                      setDropdownOpen(false);
+                      setSelectedSerial(s);
+                      setDropdownVisible(false);
+                      setSearchQuery('');
+                      if (isPlayerActive) {
+                        handlePlayEpisode(selectedDay);
+                      }
                     }}
                   >
-                    <View>
-                      <Text style={styles.modalItemTitle}>{s.title}</Text>
-                      <Text style={styles.modalItemTamil}>{s.tamilTitle} • {s.timeSlot}</Text>
+                    <View style={styles.serialOptionLeft}>
+                      <ChannelLogo channelCode={s.channelCode} size={scale(20)} style={{ marginRight: scale(10) }} />
+                      <View>
+                        <Text style={[styles.serialOptionTitle, isSelected && styles.serialOptionTitleActive]}>
+                          {s.title}
+                        </Text>
+                        <Text style={styles.serialOptionMeta}>
+                          {s.tamilTitle} • {s.channel} • {s.timeSlot}
+                        </Text>
+                      </View>
                     </View>
-                    {sandboxSerial.id === s.id && (
-                      <Ionicons name="checkmark-circle" size={scale(18)} color="#2563eb" />
+
+                    {isSelected && (
+                      <Ionicons name="checkmark-circle" size={scale(20)} color="#2563eb" />
                     )}
                   </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          </TouchableOpacity>
-        </Modal>
-      </ScrollView>
-    );
-  }
-
-  // -------------------------------------------------------------
-  // RENDER: MAIN TV SERIALS CATALOG VIEW
-  // -------------------------------------------------------------
-  return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.scrollContent}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* 0. TOP NAVBAR WITH TWO SERVERS: Server 1 (Tamildhool) & Server 2 (Tamilgun) */}
-      <View style={styles.serverNavContainer}>
-        <View style={styles.serverTabsRow}>
-          {SERVERS.map((srv) => {
-            const isActive = activeServerId === srv.id;
-            return (
-              <TouchableOpacity
-                key={srv.id}
-                style={[
-                  styles.serverTabPill,
-                  isActive && styles.serverTabPillActive
-                ]}
-                activeOpacity={0.8}
-                onPress={() => {
-                  setActiveServerId(srv.id);
-                  setHeroIndex(0);
-                }}
-              >
-                <View
-                  style={[
-                    styles.serverIndicatorDot,
-                    { backgroundColor: isActive ? '#22c55e' : '#64748b' }
-                  ]}
-                />
-                <Text
-                  style={[
-                    styles.serverTabLabel,
-                    isActive && styles.serverTabLabelActive
-                  ]}
-                >
-                  {srv.displayName}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <View style={styles.serverMetaTag}>
-          <Text style={styles.serverMetaText}>
-            SOURCE: <Text style={{ color: activeServer.color, fontWeight: '800' }}>{activeServer.domain}</Text> • 0ms
-          </Text>
-        </View>
-      </View>
-
-      {/* 1. TOP HERO BANNER (Cached rich metadata & hero backdrops, NO star ratings) */}
-      <View style={styles.heroOuterWrapper}>
-        <LinearGradient
-          colors={['#070a13', '#0b1222', '#0f172a']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={styles.heroCard}
-        >
-          {/* Top Row: Pill Tag + Pause/Play Button */}
-          <View style={styles.heroHeaderRow}>
-            <View style={styles.networkBadgePill}>
-              <ChannelLogo channelCode={currentHero.channelCode} size={scale(13)} style={{ marginRight: scale(5) }} />
-              <Text style={styles.networkBadgeText}>{currentHero.networkTag}</Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.pauseCircleBtn}
-              activeOpacity={0.7}
-              onPress={() => setIsPaused((prev) => !prev)}
-            >
-              <Ionicons
-                name={isPaused ? 'play' : 'pause'}
-                size={scale(15)}
-                color="#ffffff"
-              />
-            </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </View>
-
-          {/* Hero Main Content Row */}
-          <View style={styles.heroMainRow}>
-            <View style={styles.heroInfoColumn}>
-              <Text style={styles.heroTitle} numberOfLines={1}>
-                {currentHero.title}
-              </Text>
-              <Text style={styles.heroTamilTitle}>
-                {currentHero.tamilTitle}
-              </Text>
-              <Text style={styles.heroDescription} numberOfLines={3}>
-                {currentHero.description}
-              </Text>
-
-              {/* Action Buttons: Quick Play + Time Slot Tag (Star rating removed!) */}
-              <View style={styles.heroActionsRow}>
-                <TouchableOpacity
-                  style={styles.quickPlayButton}
-                  activeOpacity={0.8}
-                  onPress={() => handleOpenSandbox(currentHero)}
-                >
-                  <Ionicons name="play" size={scale(14)} color="#ffffff" style={{ marginRight: scale(5) }} />
-                  <Text style={styles.quickPlayText}>Quick Play</Text>
-                </TouchableOpacity>
-
-                <View style={styles.heroTimeSlotBadge}>
-                  <Ionicons name="time-outline" size={scale(13)} color="#cbd5e1" style={{ marginRight: scale(4) }} />
-                  <Text style={styles.heroTimeSlotText}>{currentHero.timeSlot}</Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Glass Live Broadcast Box */}
-            <View style={styles.liveBroadcastContainer}>
-              <View style={styles.liveBroadcastGlassCard}>
-                <Ionicons name="tv-outline" size={scale(24)} color="#eab308" />
-                <Text style={styles.liveBroadcastTitle}>LIVE</Text>
-                <Text style={styles.liveBroadcastSubtitle}>BROADCAST</Text>
-                <Animated.View style={[styles.liveStatusDot, { opacity: pulseAnim }]} />
-              </View>
-            </View>
-          </View>
-
-          {/* Carousel Pagination Dots */}
-          <View style={styles.paginationRow}>
-            {serverSerials.map((_, index) => {
-              const isActive = index === heroIndex;
-              return (
-                <TouchableOpacity
-                  key={`dot-${index}`}
-                  onPress={() => setHeroIndex(index)}
-                  activeOpacity={0.7}
-                  style={[
-                    styles.paginationDot,
-                    isActive ? styles.paginationDotActive : styles.paginationDotInactive
-                  ]}
-                />
-              );
-            })}
-          </View>
-        </LinearGradient>
-      </View>
-
-      {/* 2. METRICS BAR (Active Channel, Total Serials, Reality Slate) */}
-      <View style={styles.metricsContainer}>
-        <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>Active Channel</Text>
-          <Text style={styles.metricValue} numberOfLines={1}>
-            {selectedChannelId === 'all' ? 'All Networks' : (CHANNELS.find(c => c.id === selectedChannelId)?.name || 'All Networks')}
-          </Text>
-        </View>
-        <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>Total Serials</Text>
-          <Text style={styles.metricValue}>{filteredSerials.length} Tamil Soap</Text>
-        </View>
-        <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>Reality Slate</Text>
-          <Text style={styles.metricValue}>{filteredReality.length} Prime Slots</Text>
-        </View>
-      </View>
-
-      {/* 3. PRIMARY BROADCASTERS / சேனல்கள் (With Latest Channel Logos) */}
-      <View style={styles.sectionHeaderRow}>
-        <View style={styles.sectionTitleWithIcon}>
-          <Ionicons name="tv" size={scale(18)} color="#2563eb" style={{ marginRight: scale(8) }} />
-          <Text style={styles.sectionHeaderTitle}>Primary Broadcasters / சேனல்கள்</Text>
-        </View>
-      </View>
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.broadcastersScrollContent}
-      >
-        {CHANNELS.map((broadcaster) => {
-          const isSelected = selectedChannelId === broadcaster.id;
-          return (
-            <TouchableOpacity
-              key={broadcaster.id}
-              style={[
-                styles.broadcasterPill,
-                isSelected && styles.broadcasterPillSelected
-              ]}
-              activeOpacity={0.75}
-              onPress={() => {
-                if (selectedChannelId === broadcaster.id) {
-                  setSelectedChannelId('all');
-                } else {
-                  setSelectedChannelId(broadcaster.id);
-                }
-              }}
-            >
-              <ChannelLogo channelCode={broadcaster.code} size={scale(20)} style={{ marginRight: scale(8) }} />
-              <View style={styles.broadcasterNamesWrapper}>
-                <Text style={styles.broadcasterName}>{broadcaster.name}</Text>
-                <Text style={styles.broadcasterTamilName}>{broadcaster.tamilName}</Text>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      {/* 4. TRENDING DAILY SERIALS / தொடர்கள் (NO star ratings, opens Sandbox on tap) */}
-      <View style={[styles.sectionHeaderRow, { marginTop: verticalScale(18) }]}>
-        <View style={styles.sectionTitleWithIcon}>
-          <Ionicons name="trending-up" size={scale(18)} color="#ef4444" style={{ marginRight: scale(8) }} />
-          <Text style={styles.sectionHeaderTitle}>Trending Daily Serials / தொடர்கள்</Text>
-        </View>
-      </View>
-
-      <View style={styles.cardsGridContainer}>
-        {filteredSerials.map((serial) => (
-          <TouchableOpacity
-            key={serial.id}
-            style={[
-              styles.serialCard,
-              { backgroundColor: serial.bgColor, borderColor: serial.borderColor }
-            ]}
-            activeOpacity={0.82}
-            onPress={() => handleOpenSandbox(serial)}
-          >
-            {/* Top row: Channel Badge + Time Slot (NO star rating!) */}
-            <View style={styles.cardTopRow}>
-              <View style={styles.channelBadgePill}>
-                <ChannelLogo channelCode={serial.channelCode} size={scale(11)} style={{ marginRight: scale(4) }} />
-                <Text style={styles.channelBadgeText}>{serial.channel}</Text>
-              </View>
-              <View style={styles.cardSlotBadge}>
-                <Text style={styles.cardSlotBadgeText}>{serial.timeSlot}</Text>
-              </View>
-            </View>
-
-            {/* Center: Title + Tamil Subtitle */}
-            <View style={styles.cardTitleContainer}>
-              <Text style={styles.cardTitleText} numberOfLines={1}>
-                {serial.title}
-              </Text>
-              <Text style={[styles.cardTamilTitleText, { color: serial.tamilColor }]} numberOfLines={1}>
-                {serial.tamilTitle}
-              </Text>
-            </View>
-
-            {/* Bottom: Episodes count + Tag */}
-            <View style={styles.cardBottomRow}>
-              <Text style={styles.cardMetaLeft}>{serial.episodes}</Text>
-              <Text style={styles.cardMetaRight}>{serial.tag || 'Daily Soap'}</Text>
-            </View>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* 5. POPULAR REALITY SHOWS / நிகழ்ச்சிகள் (NO star ratings) */}
-      <View style={styles.realityHeaderWrapper}>
-        <Text style={styles.sectionHeaderTitleCentered}>Popular Reality Shows / நிகழ்ச்சிகள்</Text>
-      </View>
-
-      <View style={styles.cardsGridContainer}>
-        {filteredReality.map((show) => (
-          <TouchableOpacity
-            key={show.id}
-            style={[
-              styles.serialCard,
-              { backgroundColor: show.bgColor, borderColor: show.borderColor }
-            ]}
-            activeOpacity={0.82}
-            onPress={() => handleOpenSandbox(show)}
-          >
-            {/* Top row: Channel Badge + Air Slot */}
-            <View style={styles.cardTopRow}>
-              <View style={styles.channelBadgePill}>
-                <ChannelLogo channelCode={show.channelCode} size={scale(11)} style={{ marginRight: scale(4) }} />
-                <Text style={styles.channelBadgeText}>{show.channel}</Text>
-              </View>
-              <View style={styles.cardSlotBadge}>
-                <Text style={styles.cardSlotBadgeText}>Weekend</Text>
-              </View>
-            </View>
-
-            {/* Center: Title + Tamil Subtitle */}
-            <View style={styles.cardTitleContainer}>
-              <Text style={styles.cardTitleText} numberOfLines={1}>
-                {show.title}
-              </Text>
-              <Text style={[styles.cardTamilTitleText, { color: show.tamilColor }]} numberOfLines={1}>
-                {show.tamilTitle}
-              </Text>
-            </View>
-
-            {/* Bottom: Genre + Time Slot */}
-            <View style={styles.cardBottomRow}>
-              <Text style={styles.cardMetaLeft}>{show.genre}</Text>
-              <Text style={styles.cardMetaRight}>{show.timeSlot}</Text>
-            </View>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </ScrollView>
+        </TouchableOpacity>
+      </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrapper: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
   container: {
     flex: 1,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#ffffff',
   },
   scrollContent: {
     paddingBottom: verticalScale(90),
   },
 
-  // 0. TOP NAVBAR SERVER SWITCHER
-  serverNavContainer: {
-    backgroundColor: '#070b14',
-    paddingHorizontal: scale(12),
-    paddingTop: verticalScale(8),
-    paddingBottom: verticalScale(6),
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+  // Top Section: Player Box or Status Nodes Hero
+  heroSection: {
+    backgroundColor: '#080c14',
   },
-  serverTabsRow: {
+  playerBox: {
+    width: '100%',
+    height: verticalScale(220),
+    backgroundColor: '#000000',
+    position: 'relative',
+    justifyContent: 'space-between',
+  },
+  loaderOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  loaderText: {
+    color: '#38bdf8',
+    fontSize: moderateScale(12),
+    fontWeight: '700',
+    marginTop: verticalScale(8),
+  },
+  playerOverlayTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: scale(8),
-  },
-  serverTabPill: {
-    flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    paddingVertical: verticalScale(6),
-    paddingHorizontal: scale(8),
-    borderRadius: scale(20),
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  serverTabPillActive: {
-    backgroundColor: 'rgba(37, 99, 235, 0.25)',
-    borderColor: '#3b82f6',
-  },
-  serverIndicatorDot: {
-    width: scale(7),
-    height: scale(7),
-    borderRadius: scale(3.5),
-    marginRight: scale(6),
-  },
-  serverTabLabel: {
-    color: '#94a3b8',
-    fontSize: moderateScale(11),
-    fontWeight: '700',
-  },
-  serverTabLabelActive: {
-    color: '#ffffff',
-    fontWeight: '900',
-  },
-  serverMetaTag: {
-    alignItems: 'center',
-    marginTop: verticalScale(4),
-  },
-  serverMetaText: {
-    color: '#64748b',
-    fontSize: moderateScale(9.5),
-    fontWeight: '600',
-    letterSpacing: 0.5,
-  },
-
-  // 1. HERO BANNER
-  heroOuterWrapper: {
     paddingHorizontal: scale(10),
     paddingTop: verticalScale(8),
-    paddingBottom: verticalScale(6),
-    backgroundColor: '#060912',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
   },
-  heroCard: {
-    borderRadius: scale(18),
-    paddingHorizontal: scale(16),
-    paddingTop: verticalScale(14),
-    paddingBottom: verticalScale(16),
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    overflow: 'hidden',
-  },
-  heroHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: verticalScale(12),
-  },
-  networkBadgePill: {
+  playerServerBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#2563eb',
-    paddingVertical: verticalScale(4),
-    paddingHorizontal: scale(12),
-    borderRadius: scale(20),
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingVertical: verticalScale(3),
+    paddingHorizontal: scale(8),
+    borderRadius: scale(10),
   },
-  networkBadgeText: {
+  statusDot: {
+    width: scale(6),
+    height: scale(6),
+    borderRadius: scale(3),
+    marginRight: scale(5),
+  },
+  playerServerBadgeText: {
     color: '#ffffff',
     fontSize: moderateScale(10.5),
-    fontWeight: '900',
-    letterSpacing: 0.8,
-  },
-  pauseCircleBtn: {
-    width: scale(32),
-    height: scale(32),
-    borderRadius: scale(16),
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.18)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  heroMainRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  heroInfoColumn: {
-    flex: 1,
-    paddingRight: scale(10),
-  },
-  heroTitle: {
-    color: '#ffffff',
-    fontSize: moderateScale(22),
-    fontWeight: '900',
-    letterSpacing: -0.4,
-  },
-  heroTamilTitle: {
-    color: '#f59e0b',
-    fontSize: moderateScale(15),
-    fontWeight: '800',
-    marginTop: verticalScale(2),
-    marginBottom: verticalScale(6),
-  },
-  heroDescription: {
-    color: '#94a3b8',
-    fontSize: moderateScale(11.5),
-    lineHeight: moderateScale(16),
-    fontWeight: '500',
-    marginBottom: verticalScale(14),
-  },
-  heroActionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  quickPlayButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#2563eb',
-    paddingVertical: verticalScale(7),
-    paddingHorizontal: scale(16),
-    borderRadius: scale(22),
-    marginRight: scale(12),
-    elevation: 3,
-  },
-  quickPlayText: {
-    color: '#ffffff',
-    fontSize: moderateScale(12),
-    fontWeight: '800',
-  },
-  heroTimeSlotBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    paddingVertical: verticalScale(5),
-    paddingHorizontal: scale(10),
-    borderRadius: scale(14),
-  },
-  heroTimeSlotText: {
-    color: '#cbd5e1',
-    fontSize: moderateScale(11.5),
     fontWeight: '700',
   },
-  liveBroadcastContainer: {
-    justifyContent: 'center',
+  playerTopActions: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingLeft: scale(4),
   },
-  liveBroadcastGlassCard: {
-    width: scale(88),
-    height: scale(88),
+  playerIconButton: {
+    width: scale(28),
+    height: scale(28),
     borderRadius: scale(14),
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
-    transform: [{ rotate: '8deg' }],
+  },
+  playerOverlayBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: scale(10),
+    paddingVertical: verticalScale(6),
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  miniPlayBtn: {
+    width: scale(28),
+    height: scale(28),
+    borderRadius: scale(14),
+    backgroundColor: '#2563eb',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  miniProgressBarBg: {
+    flex: 1,
+    height: verticalScale(4),
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    borderRadius: scale(2),
+    overflow: 'hidden',
+    marginRight: scale(8),
+  },
+  miniProgressBarFill: {
+    height: '100%',
+    backgroundColor: '#38bdf8',
+  },
+  miniTimeText: {
+    color: '#e2e8f0',
+    fontSize: moderateScale(9.5),
+    fontWeight: '600',
+  },
+
+  // Fullscreen Styles
+  fullscreenContainer: {
+    flex: 1,
+    backgroundColor: '#000000',
     position: 'relative',
   },
-  liveBroadcastTitle: {
-    color: '#94a3b8',
-    fontSize: moderateScale(8.5),
-    fontWeight: '800',
-    letterSpacing: 0.8,
-    marginTop: verticalScale(3),
+  fullscreenControls: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'space-between',
+    padding: scale(16),
   },
-  liveBroadcastSubtitle: {
-    color: '#64748b',
-    fontSize: moderateScale(7),
-    fontWeight: '700',
-    letterSpacing: 0.6,
-  },
-  liveStatusDot: {
-    position: 'absolute',
-    bottom: scale(6),
-    right: scale(6),
-    width: scale(8),
-    height: scale(8),
-    borderRadius: scale(4),
-    backgroundColor: '#22c55e',
-  },
-  paginationRow: {
+  fullscreenTopBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: verticalScale(14),
-    gap: scale(6),
   },
-  paginationDot: {
+  playerTopBtn: {
+    padding: scale(6),
+    marginRight: scale(8),
+  },
+  fullscreenTitle: {
+    color: '#ffffff',
+    fontSize: moderateScale(14),
+    fontWeight: '800',
+    flex: 1,
+  },
+  fullscreenCenterControls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: scale(36),
+  },
+  mainPlayBtn: {
+    width: scale(64),
+    height: scale(64),
+    borderRadius: scale(32),
+    backgroundColor: 'rgba(37, 99, 235, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  seekBtn: {
+    padding: scale(8),
+  },
+  fullscreenBottomBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  timeText: {
+    color: '#ffffff',
+    fontSize: moderateScale(11),
+    fontWeight: '700',
+  },
+  progressBarBg: {
+    flex: 1,
     height: verticalScale(5),
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     borderRadius: scale(2.5),
+    marginHorizontal: scale(10),
+    overflow: 'hidden',
   },
-  paginationDotActive: {
-    width: scale(22),
-    backgroundColor: '#3b82f6',
-  },
-  paginationDotInactive: {
-    width: scale(6),
-    backgroundColor: '#475569',
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#38bdf8',
   },
 
-  // 2. METRICS BAR
-  metricsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    paddingVertical: verticalScale(12),
-    paddingHorizontal: scale(8),
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    elevation: 1,
-  },
-  metricItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  metricLabel: {
-    color: '#6b7280',
-    fontSize: moderateScale(11),
-    fontWeight: '500',
-    marginBottom: verticalScale(2),
-  },
-  metricValue: {
-    color: '#111827',
-    fontSize: moderateScale(13),
-    fontWeight: '800',
-  },
-
-  // 3. BROADCASTERS ROW
-  sectionHeaderRow: {
-    paddingHorizontal: scale(14),
-    marginTop: verticalScale(14),
-    marginBottom: verticalScale(10),
-  },
-  sectionTitleWithIcon: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  sectionHeaderTitle: {
-    color: '#1f2937',
-    fontSize: moderateScale(14),
-    fontWeight: '800',
-    letterSpacing: -0.2,
-  },
-  broadcastersScrollContent: {
-    paddingHorizontal: scale(14),
-    gap: scale(10),
-  },
-  broadcasterPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    paddingVertical: verticalScale(7),
-    paddingHorizontal: scale(14),
-    borderRadius: scale(12),
-    borderWidth: 1.2,
-    borderColor: '#e5e7eb',
-    elevation: 1,
-  },
-  broadcasterPillSelected: {
-    backgroundColor: '#dbeafe',
-    borderColor: '#2563eb',
-  },
-  broadcasterNamesWrapper: {
-    justifyContent: 'center',
-  },
-  broadcasterName: {
-    color: '#111827',
-    fontSize: moderateScale(12),
-    fontWeight: '800',
-  },
-  broadcasterTamilName: {
-    color: '#6b7280',
-    fontSize: moderateScale(9.5),
-    fontWeight: '600',
-    marginTop: verticalScale(1),
-  },
-
-  // 4 & 5. CARDS GRID
-  cardsGridContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    paddingHorizontal: scale(12),
-    rowGap: verticalScale(10),
-  },
-  serialCard: {
-    width: (windowWidth - scale(32)) / 2,
-    borderRadius: scale(14),
-    padding: scale(12),
-    borderWidth: 1.2,
-    justifyContent: 'space-between',
-    minHeight: verticalScale(116),
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-  },
-  cardTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  channelBadgePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    paddingVertical: verticalScale(2),
-    paddingHorizontal: scale(7),
-    borderRadius: scale(6),
-  },
-  channelBadgeText: {
-    color: '#f3f4f6',
-    fontSize: moderateScale(9.5),
-    fontWeight: '700',
-  },
-  cardSlotBadge: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    paddingVertical: verticalScale(2),
-    paddingHorizontal: scale(6),
-    borderRadius: scale(6),
-  },
-  cardSlotBadgeText: {
-    color: '#93c5fd',
-    fontSize: moderateScale(9),
-    fontWeight: '700',
-  },
-  cardTitleContainer: {
-    marginVertical: verticalScale(8),
-  },
-  cardTitleText: {
-    color: '#ffffff',
-    fontSize: moderateScale(13.5),
-    fontWeight: '900',
-    letterSpacing: -0.2,
-  },
-  cardTamilTitleText: {
-    fontSize: moderateScale(11),
-    fontWeight: '800',
-    marginTop: verticalScale(2),
-  },
-  cardBottomRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: verticalScale(6),
-  },
-  cardMetaLeft: {
-    color: '#94a3b8',
-    fontSize: moderateScale(9.5),
-    fontWeight: '600',
-  },
-  cardMetaRight: {
-    color: '#94a3b8',
-    fontSize: moderateScale(9.5),
-    fontWeight: '600',
-  },
-
-  realityHeaderWrapper: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: verticalScale(20),
-    marginBottom: verticalScale(10),
-  },
-  sectionHeaderTitleCentered: {
-    color: '#1f2937',
-    fontSize: moderateScale(14),
-    fontWeight: '800',
-    letterSpacing: -0.2,
-  },
-
-  // -------------------------------------------------------------
-  // SANDBOX VIEW STYLES (MATCHED TO SCREENSHOT)
-  // -------------------------------------------------------------
-  sandboxContainer: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-  },
-  sandboxScrollContent: {
-    paddingBottom: verticalScale(90),
-  },
-  sandboxTopNav: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#080c14',
-    paddingHorizontal: scale(14),
-    paddingVertical: verticalScale(10),
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  backButtonText: {
-    color: '#ffffff',
-    fontSize: moderateScale(13),
-    fontWeight: '700',
-    marginLeft: scale(6),
-  },
-  serverPillBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    paddingVertical: verticalScale(4),
-    paddingHorizontal: scale(10),
-    borderRadius: scale(12),
-  },
-  serverStatusDot: {
-    width: scale(7),
-    height: scale(7),
-    borderRadius: scale(3.5),
-    marginRight: scale(6),
-  },
-  serverPillText: {
-    color: '#ffffff',
-    fontSize: moderateScale(10.5),
-    fontWeight: '700',
-  },
-
-  // Sandbox Hero Header
-  sandboxHero: {
-    backgroundColor: '#080c14',
-  },
-  sandboxHeroGradient: {
-    paddingVertical: verticalScale(24),
+  // 3 Status Circles Hero Gradient
+  nodesHeroGradient: {
+    paddingVertical: verticalScale(22),
     paddingHorizontal: scale(12),
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255, 255, 255, 0.08)',
@@ -1257,8 +894,8 @@ const styles = StyleSheet.create({
     marginTop: verticalScale(2),
   },
 
-  // Sandbox Metrics Bar
-  sandboxMetricsBar: {
+  // Metrics Bar
+  metricsBar: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
@@ -1268,71 +905,75 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f1f5f9',
     elevation: 1,
   },
-  sandboxMetricCol: {
+  metricCol: {
     alignItems: 'center',
     flex: 1,
   },
-  sandboxMetricLabel: {
+  metricLabel: {
     color: '#6b7280',
     fontSize: moderateScale(11),
     fontWeight: '500',
     marginBottom: verticalScale(2),
   },
-  sandboxMetricValue: {
+  metricValue: {
     color: '#111827',
     fontSize: moderateScale(13.5),
     fontWeight: '800',
   },
 
   // Steps Container
-  stepsWrapper: {
+  stepsContainer: {
     paddingHorizontal: scale(14),
     paddingTop: verticalScale(16),
   },
   stepSection: {
-    marginBottom: verticalScale(8),
+    marginBottom: verticalScale(6),
   },
-  stepTitle: {
+  stepHeaderTitle: {
     color: '#1f2937',
     fontSize: moderateScale(13.5),
     fontWeight: '800',
     marginBottom: verticalScale(10),
   },
 
-  // Step 1: Channels Grid
-  channelsGrid: {
+  // Step 1: Server Buttons (Channels removed!)
+  serversRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     justifyContent: 'space-between',
-    gap: scale(8),
+    gap: scale(10),
   },
-  channelButton: {
-    width: (windowWidth - scale(36)) / 2,
+  serverSelectButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: verticalScale(12),
-    paddingHorizontal: scale(14),
+    justifyContent: 'center',
+    paddingVertical: verticalScale(13),
+    paddingHorizontal: scale(10),
     borderRadius: scale(10),
+    borderWidth: 1.2,
   },
-  channelButtonActive: {
-    backgroundColor: '#2563eb',
+  serverSelectButtonActive: {
+    backgroundColor: '#2563eb', // Royal blue active button matching screenshot
+    borderColor: '#2563eb',
+    elevation: 3,
   },
-  channelButtonInactive: {
-    backgroundColor: '#f1f5f9',
+  serverSelectButtonInactive: {
+    backgroundColor: '#f1f5f9', // Light gray inactive button
+    borderColor: '#f1f5f9',
   },
-  channelButtonText: {
+  serverSelectButtonText: {
     fontSize: moderateScale(12.5),
     fontWeight: '800',
   },
-  channelButtonTextActive: {
+  serverSelectButtonTextActive: {
     color: '#ffffff',
   },
-  channelButtonTextInactive: {
+  serverSelectButtonTextInactive: {
     color: '#1f2937',
   },
 
   // Step 2: Dropdown Selector
-  dropdownSelector: {
+  dropdownBox: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -1340,6 +981,11 @@ const styles = StyleSheet.create({
     borderRadius: scale(10),
     paddingVertical: verticalScale(12),
     paddingHorizontal: scale(14),
+  },
+  dropdownLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
   },
   dropdownSelectedText: {
     color: '#111827',
@@ -1347,7 +993,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     flex: 1,
   },
-  archiveTracksText: {
+  archiveSubtitle: {
     color: '#6b7280',
     fontSize: moderateScale(11),
     fontWeight: '500',
@@ -1361,7 +1007,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: verticalScale(8),
   },
-  monthNavWrapper: {
+  monthNav: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#f1f5f9',
@@ -1372,42 +1018,42 @@ const styles = StyleSheet.create({
   monthNavBtn: {
     padding: scale(4),
   },
-  monthNavText: {
+  monthNavLabel: {
     color: '#111827',
     fontSize: moderateScale(12),
     fontWeight: '800',
     marginHorizontal: scale(6),
   },
-  calendarContainer: {
+  calendarCard: {
     borderWidth: 1,
     borderColor: '#f1f5f9',
     borderRadius: scale(12),
     padding: scale(8),
     backgroundColor: '#ffffff',
   },
-  weekDaysRow: {
+  calendarWeekRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     marginBottom: verticalScale(6),
   },
-  weekDayCell: {
+  calendarWeekCell: {
     flex: 1,
     alignItems: 'center',
   },
-  weekDayText: {
+  calendarWeekText: {
     color: '#6b7280',
     fontSize: moderateScale(11.5),
     fontWeight: '700',
   },
-  daysGrid: {
+  calendarDaysGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
   },
-  emptyDayCell: {
+  emptyGridCell: {
     width: `${100 / 7}%`,
     height: verticalScale(36),
   },
-  dayCell: {
+  gridDayCell: {
     width: `${100 / 7}%`,
     height: verticalScale(36),
     justifyContent: 'center',
@@ -1416,25 +1062,25 @@ const styles = StyleSheet.create({
     borderRadius: scale(6),
     backgroundColor: '#f1f5f9',
   },
-  dayCellActive: {
-    backgroundColor: '#2563eb',
+  gridDayCellActive: {
+    backgroundColor: '#2563eb', // Royal blue active date cell matching screenshot 25
   },
-  dayCellText: {
+  gridDayText: {
     color: '#1f2937',
     fontSize: moderateScale(12),
     fontWeight: '700',
   },
-  dayCellTextActive: {
+  gridDayTextActive: {
     color: '#ffffff',
     fontWeight: '900',
   },
 
-  // Sandbox Action
-  sandboxActionWrapper: {
+  // Action Button
+  actionBtnWrapper: {
     marginTop: verticalScale(22),
     alignItems: 'center',
   },
-  watchStreamBtn: {
+  watchStreamButton: {
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
@@ -1447,50 +1093,88 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 8,
   },
-  watchStreamBtnText: {
+  watchStreamButtonText: {
     color: '#ffffff',
     fontSize: moderateScale(14),
     fontWeight: '900',
   },
 
-  // Dropdown Modal
-  modalOverlay: {
+  // Modal Dropdown Sheet
+  modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
     justifyContent: 'center',
     paddingHorizontal: scale(16),
   },
-  modalContent: {
+  modalSheet: {
     backgroundColor: '#ffffff',
     borderRadius: scale(16),
     padding: scale(16),
-    maxHeight: '80%',
+    maxHeight: '82%',
+    elevation: 8,
   },
-  modalTitle: {
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: verticalScale(12),
+  },
+  modalSheetTitle: {
     color: '#111827',
     fontSize: moderateScale(15),
     fontWeight: '900',
-    marginBottom: verticalScale(12),
   },
-  modalItem: {
+  modalSheetSubtitle: {
+    color: '#6b7280',
+    fontSize: moderateScale(11),
+    fontWeight: '600',
+    marginTop: verticalScale(2),
+  },
+  modalCloseBtn: {
+    padding: scale(4),
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    borderRadius: scale(10),
+    paddingHorizontal: scale(12),
+    paddingVertical: verticalScale(6),
+    marginBottom: verticalScale(10),
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: moderateScale(12),
+    color: '#111827',
+    paddingVertical: 0,
+  },
+  serialOptionItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: verticalScale(10),
+    paddingHorizontal: scale(8),
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
-  },
-  modalItemActive: {
-    backgroundColor: '#eff6ff',
     borderRadius: scale(8),
-    paddingHorizontal: scale(8),
   },
-  modalItemTitle: {
+  serialOptionItemActive: {
+    backgroundColor: '#eff6ff',
+  },
+  serialOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  serialOptionTitle: {
     color: '#111827',
     fontSize: moderateScale(13),
     fontWeight: '800',
   },
-  modalItemTamil: {
+  serialOptionTitleActive: {
+    color: '#2563eb',
+  },
+  serialOptionMeta: {
     color: '#6b7280',
     fontSize: moderateScale(10.5),
     fontWeight: '600',
