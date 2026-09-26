@@ -469,13 +469,18 @@ class VLCPlayerView(context: ThemedReactContext) :
     }
 
     fun seekTo(timeMs: Long) {
-        mediaPlayer?.let { player ->
-            player.time = timeMs
-            Arguments.createMap().apply {
-                putDouble("currentTime", player.time / 1000.0)
-                putDouble("duration", player.length / 1000.0)
-                emit("onSeek", this)
-            }
+        val player = mediaPlayer ?: return
+        val targetMs = Math.max(0L, timeMs)
+        try {
+            Log.d(TAG, "seekTo: targetMs=$targetMs, length=${player.length}")
+            player.time = targetMs
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in seekTo", e)
+        }
+        Arguments.createMap().apply {
+            putDouble("currentTime", targetMs / 1000.0)
+            putDouble("duration", player.length / 1000.0)
+            emit("onSeek", this)
         }
     }
 

@@ -61,12 +61,14 @@ Write-Host "Staged Version Name: $stagedVersionName" -ForegroundColor Green
 Write-Host "Staged Version Code: $stagedVersionCode" -ForegroundColor Green
 Write-Host ""
 
-# Ensure VLCPlayerView native patch is applied
-$vlcPatch = Join-Path $stitchPath "android\vlc_patch\VLCPlayerView.kt"
-$vlcTarget = Join-Path $stitchPath "node_modules\@lunarr\vlc-player\android\src\main\java\com\lunarr\vlcplayer\VLCPlayerView.kt"
-if ((Test-Path $vlcPatch) -and (Test-Path (Split-Path $vlcTarget -Parent))) {
-    Copy-Item $vlcPatch $vlcTarget -Force
-    Write-Host "Applied custom VLCPlayerView native patch." -ForegroundColor Green
+# Ensure VLC native patches are applied
+$vlcPatchDir = Join-Path $stitchPath "android\vlc_patch"
+$vlcTargetDir = Join-Path $stitchPath "node_modules\@lunarr\vlc-player\android\src\main\java\com\lunarr\vlcplayer"
+if ((Test-Path $vlcPatchDir) -and (Test-Path $vlcTargetDir)) {
+    Get-ChildItem -Path $vlcPatchDir -File | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $vlcTargetDir $_.Name) -Force
+    }
+    Write-Host "Applied custom VLC native patches from android\vlc_patch." -ForegroundColor Green
 }
 
 # Step 2: Compile the 3 APKs via Gradle

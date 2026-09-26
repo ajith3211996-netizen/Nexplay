@@ -781,11 +781,9 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       uri: currentSourceUri,
       hwDecoderEnabled: VLCHardwareDecoder.Automatic,
       mediaOptions: [
-        ':network-caching=300',
-        ':live-caching=300',
-        ':file-caching=300',
-        ':clock-jitter=0',
-        ':clock-synchro=0',
+        ':network-caching=1500',
+        ':file-caching=1500',
+        ':http-reconnect=true',
         ':no-stats'
       ],
       initOptions: [
@@ -793,8 +791,8 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
         '--skip-frames',
         '--no-sub-autodetect-file',
         '--no-stats',
-        '--network-caching=300',
-        '--ipv4-timeout=1500'
+        '--network-caching=1500',
+        '--ipv4-timeout=2000'
       ]
     };
   }, [currentSourceUri]);
@@ -812,17 +810,28 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
       vlcPlayerRef.current?.pause();
     },
     seekTo: (sec) => {
-      seekToTimestamp(sec);
+      const num = Number(sec);
+      if (!isNaN(num) && isFinite(num)) {
+        seekToTimestamp(num);
+      }
     },
     seekBy: (sec) => {
-      const cur = currentTimeRef.current || 0;
-      seekToTimestamp(cur + sec);
+      const delta = (typeof sec === 'number' && !isNaN(sec)) ? sec : 10;
+      const cur = (typeof currentTimeRef.current === 'number' && !isNaN(currentTimeRef.current) && currentTimeRef.current >= 0)
+        ? currentTimeRef.current
+        : ((typeof currentTime === 'number' && !isNaN(currentTime)) ? currentTime : 0);
+      seekToTimestamp(Math.max(0, cur + delta));
     },
     get currentTime() {
-      return currentTimeRef.current || 0;
+      return (typeof currentTimeRef.current === 'number' && !isNaN(currentTimeRef.current))
+        ? currentTimeRef.current
+        : 0;
     },
     set currentTime(sec) {
-      seekToTimestamp(sec);
+      const num = Number(sec);
+      if (!isNaN(num) && isFinite(num)) {
+        seekToTimestamp(num);
+      }
     },
     get duration() {
       return durationRef.current || 0;
@@ -1543,18 +1552,23 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
     resetControlsTimeout();
   };
 
-  // Centralized instant deterministic seek handler for Media3 ExoPlayer
+  // Centralized robust seek handler for VLC Player
   const seekToTimestamp = (targetSeconds) => {
     if (!player) return;
+    const num = Number(targetSeconds);
+    if (isNaN(num) || !isFinite(num)) {
+      console.warn("[MovieDetailScreen] ?? Invalid seek targetSeconds ignored:", targetSeconds);
+      return;
+    }
     const fallbackDuration = details?.runtime ? details.runtime * 60 : 0;
-    const safeDuration = duration > 0 ? duration : (player?.duration > 0 ? player.duration : fallbackDuration);
-    const target = safeDuration > 0 ? Math.min(safeDuration, Math.max(0, targetSeconds)) : Math.max(0, targetSeconds);
+    const safeDuration = (typeof duration === "number" && duration > 0)
+      ? duration
+      : ((typeof player?.duration === "number" && player.duration > 0) ? player.duration : fallbackDuration);
+    const target = safeDuration > 0 ? Math.min(safeDuration, Math.max(0, num)) : Math.max(0, num);
 
-    console.log(`[MovieDetailScreen] ⏩ Direct VLC Seek to: ${target.toFixed(1)}s (Total duration: ${safeDuration.toFixed(1)}s)`);
+    console.log(`[MovieDetailScreen] ? Direct VLC Seek to: ${target.toFixed(1)}s (Total duration: ${safeDuration.toFixed(1)}s)`);
     pendingSeekTimeRef.current = target;
     isSeekingRef.current = true;
-    setIsBuffering(true);
-    isBufferingRef.current = true;
     lastSeekTimestampRef.current = Date.now();
     stallsHistoryRef.current = [];
     currentTimeRef.current = target;
@@ -1562,48 +1576,26 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
 
     try {
       vlcPlayerRef.current?.seek(target);
-      vlcPlayerRef.current?.play();
-      setIsPlaying(true);
     } catch (e) {
-      console.warn('[MovieDetailScreen] seekTo error:', e);
+      console.warn("[MovieDetailScreen] seekTo error:", e);
     }
     resetControlsTimeout();
   };
 
   const skipForward = (secs = 10) => {
-    const cur = (typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0)
+    const delta = (typeof secs === "number" && !isNaN(secs)) ? secs : 10;
+    const cur = (typeof currentTimeRef.current === "number" && !isNaN(currentTimeRef.current) && currentTimeRef.current >= 0)
       ? currentTimeRef.current
-      : ((typeof player?.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0));
-    if (player && typeof player.seekBy === 'function') {
-      try {
-        player.seekBy(secs);
-        const newPos = Math.max(0, cur + secs);
-        currentTimeRef.current = newPos;
-        setCurrentTime(newPos);
-        lastSeekTimestampRef.current = Date.now();
-        resetControlsTimeout();
-        return;
-      } catch (_) {}
-    }
-    seekToTimestamp(cur + secs);
+      : ((typeof currentTime === "number" && !isNaN(currentTime)) ? currentTime : 0);
+    seekToTimestamp(cur + delta);
   };
 
   const skipBackward = (secs = 10) => {
-    const cur = (typeof currentTimeRef.current === 'number' && currentTimeRef.current >= 0)
+    const delta = (typeof secs === "number" && !isNaN(secs)) ? secs : 10;
+    const cur = (typeof currentTimeRef.current === "number" && !isNaN(currentTimeRef.current) && currentTimeRef.current >= 0)
       ? currentTimeRef.current
-      : ((typeof player?.currentTime === 'number' && player.currentTime >= 0) ? player.currentTime : (currentTime || 0));
-    if (player && typeof player.seekBy === 'function') {
-      try {
-        player.seekBy(-secs);
-        const newPos = Math.max(0, cur - secs);
-        currentTimeRef.current = newPos;
-        setCurrentTime(newPos);
-        lastSeekTimestampRef.current = Date.now();
-        resetControlsTimeout();
-        return;
-      } catch (_) {}
-    }
-    seekToTimestamp(cur - secs);
+      : ((typeof currentTime === "number" && !isNaN(currentTime)) ? currentTime : 0);
+    seekToTimestamp(Math.max(0, cur - delta));
   };
 
     const changePlaybackSpeed = (speed) => {
@@ -1737,10 +1729,10 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
           // Double Tap strictly recognized!
           lastTapRef.current = { time: now, x: locationX };
           if (locationX < currentW * 0.45) {
-            skipBackward();
+            skipBackward(10);
             showDoubleTapFeedback('left');
           } else if (locationX > currentW * 0.55) {
-            skipForward();
+            skipForward(10);
             showDoubleTapFeedback('right');
           } else {
             handlePlayerPlayPause();
@@ -2015,11 +2007,18 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
               if (isScrubbingRef.current) return;
               const cur = event?.currentTime;
               if (typeof cur === 'number' && !isNaN(cur)) {
-                if (pendingSeekTimeRef.current !== null && Math.abs(cur - pendingSeekTimeRef.current) > 3 && cur < 0.5) {
-                  return;
+                // If a seek was recently initiated, filter out stale pre-seek time reports from the decoder
+                if (pendingSeekTimeRef.current !== null) {
+                  const elapsed = Date.now() - lastSeekTimestampRef.current;
+                  if (Math.abs(cur - pendingSeekTimeRef.current) > 3) {
+                    if (elapsed < 5000) {
+                      return; // Drop stale pre-seek progress while decoder catches up
+                    }
+                  }
+                  pendingSeekTimeRef.current = null;
+                  isSeekingRef.current = false;
                 }
-                pendingSeekTimeRef.current = null;
-                isSeekingRef.current = false;
+
                 currentTimeRef.current = cur;
                 if (cur >= 0) {
                   setHasFirstFrameRendered(true);
@@ -2041,18 +2040,22 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
             }}
             onSeek={(event) => {
               console.log('[VLCPlayer] onSeek event:', event);
-              pendingSeekTimeRef.current = null;
-              isSeekingRef.current = false;
-              setIsBuffering(false);
-              isBufferingRef.current = false;
-              vlcPlayerRef.current?.getTracks();
+              if (isBufferingRef.current) {
+                setIsBuffering(false);
+                isBufferingRef.current = false;
+              }
             }}
             onPlaying={() => {
               console.log('[VLCPlayer] onPlaying');
               setIsPlaying(true);
               isPlayingRef.current = true;
-              pendingSeekTimeRef.current = null;
-              isSeekingRef.current = false;
+              if (pendingSeekTimeRef.current !== null) {
+                const elapsed = Date.now() - lastSeekTimestampRef.current;
+                if (elapsed >= 1500) {
+                  pendingSeekTimeRef.current = null;
+                  isSeekingRef.current = false;
+                }
+              }
               setHasFirstFrameRendered(true);
               setIsBuffering(false);
               isBufferingRef.current = false;
@@ -2689,7 +2692,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
               {/* Skip Backward 10s */}
               {hasStartedPlayback ? (
                 <TouchableOpacity 
-                  onPress={skipBackward}
+                  onPress={() => skipBackward(10)}
                   activeOpacity={0.75}
                   style={{ 
                     width: centerSkipBtnSize, 
@@ -2744,7 +2747,7 @@ export default function MovieDetailScreen({ movie, onBack, onNavigateMovie }) {
               {/* Skip Forward 10s */}
               {hasStartedPlayback ? (
                 <TouchableOpacity 
-                  onPress={skipForward}
+                  onPress={() => skipForward(10)}
                   activeOpacity={0.75}
                   style={{ 
                     width: centerSkipBtnSize, 
